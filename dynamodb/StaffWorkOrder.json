@@ -1,0 +1,101 @@
+{
+    "_comment": [
+        "StaffWorkOrder — junction table for Staff ↔ WorkOrder many-to-many.",
+        "",
+        "Each item represents one staff assignment to one work order.",
+        "",
+        "Key pattern:",
+        "  PK = TENANT#<tenantId>",
+        "  SK = WO#<woId>#STAFF#<staffId>",
+        "",
+        "This means:",
+        "  - All assignments for a WO  : PK = TENANT#x, begins_with(SK, 'WO#<woId>#')",
+        "  - All assignments for staff : GSI-AssignmentByStaff, PK = STAFF#<staffId>",
+        "",
+        "Item attributes:",
+        "  tenantId    — redundant with PK prefix, kept for readability",
+        "  woId        — work order identifier",
+        "  staffId     — staff member identifier (Cognito sub)",
+        "  role        — e.g. 'lead', 'support', 'inspector'",
+        "  assignedAt  — ISO-8601 UTC timestamp",
+        "  assignedBy  — staffId of the admin who created the assignment",
+        "",
+        "GSIs:",
+        "  GSI-AssignmentByStaff:",
+        "    PK = StaffId  (e.g. 'STAFF#<staffId>')",
+        "    SK = SK       (WO#<woId>#STAFF#<staffId> — preserves WO ordering)",
+        "    → Query: all WOs assigned to a given mechanic across the tenant",
+        "",
+        "  GSI-AssignmentByWO:",
+        "    PK = WOId     (e.g. 'WO#<woId>')",
+        "    SK = SK",
+        "    → Query: all staff assigned to a given work order",
+        "      (alternative to main-table begins_with query; useful for cross-tenant admin views)"
+    ],
+    "Table": {
+        "AttributeDefinitions": [
+            {
+                "AttributeName": "PK",
+                "AttributeType": "S"
+            },
+            {
+                "AttributeName": "SK",
+                "AttributeType": "S"
+            },
+            {
+                "AttributeName": "StaffId",
+                "AttributeType": "S"
+            },
+            {
+                "AttributeName": "WOId",
+                "AttributeType": "S"
+            }
+        ],
+        "TableName": "StaffWorkOrder",
+        "KeySchema": [
+            {
+                "AttributeName": "PK",
+                "KeyType": "HASH"
+            },
+            {
+                "AttributeName": "SK",
+                "KeyType": "RANGE"
+            }
+        ],
+        "BillingMode": "PAY_PER_REQUEST",
+        "GlobalSecondaryIndexes": [
+            {
+                "IndexName": "GSI-AssignmentByStaff",
+                "KeySchema": [
+                    {
+                        "AttributeName": "StaffId",
+                        "KeyType": "HASH"
+                    },
+                    {
+                        "AttributeName": "SK",
+                        "KeyType": "RANGE"
+                    }
+                ],
+                "Projection": {
+                    "ProjectionType": "ALL"
+                }
+            },
+            {
+                "IndexName": "GSI-AssignmentByWO",
+                "KeySchema": [
+                    {
+                        "AttributeName": "WOId",
+                        "KeyType": "HASH"
+                    },
+                    {
+                        "AttributeName": "SK",
+                        "KeyType": "RANGE"
+                    }
+                ],
+                "Projection": {
+                    "ProjectionType": "ALL"
+                }
+            }
+        ]
+    }
+}

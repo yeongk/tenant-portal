@@ -1,0 +1,88 @@
+{
+    "_comment": [
+        "WorkOrder table — tenant-scoped work orders.",
+        "",
+        "Key pattern:",
+        "  Main WO record : PK = TENANT#<tenantId>  SK = WO#<woId>",
+        "",
+        "All staff are equal participants — no lead/primary mechanic concept.",
+        "Staff assignments live entirely in the StaffWorkOrder junction table.",
+        "WorkOrder items carry no StaffId attribute.",
+        "",
+        "GSIs:",
+        "  GSI-WOByCustomer : CustomerId (PK)  SK (SK)  — all WOs for a customer",
+        "  GSI-WOByStatus   : PK (PK)  StatusSK (SK)   — admin dashboard by status"
+    ],
+    "Table": {
+        "AttributeDefinitions": [
+            {
+                "AttributeName": "CustomerId",
+                "AttributeType": "S"
+            },
+            {
+                "AttributeName": "PK",
+                "AttributeType": "S"
+            },
+            {
+                "AttributeName": "SK",
+                "AttributeType": "S"
+            },
+            {
+                "AttributeName": "StatusSK",
+                "AttributeType": "S"
+            }
+        ],
+        "TableName": "WorkOrder",
+        "KeySchema": [
+            {
+                "AttributeName": "PK",
+                "KeyType": "HASH"
+            },
+            {
+                "AttributeName": "SK",
+                "KeyType": "RANGE"
+            }
+        ],
+        "BillingMode": "PAY_PER_REQUEST",
+        "GlobalSecondaryIndexes": [
+            {
+                "IndexName": "GSI-WOByCustomer",
+                "KeySchema": [
+                    {
+                        "AttributeName": "CustomerId",
+                        "KeyType": "HASH"
+                    },
+                    {
+                        "AttributeName": "SK",
+                        "KeyType": "RANGE"
+                    }
+                ],
+                "Projection": {
+                    "ProjectionType": "ALL"
+                }
+            },
+            {
+                "IndexName": "GSI-WOByStatus",
+                "KeySchema": [
+                    {
+                        "AttributeName": "PK",
+                        "KeyType": "HASH"
+                    },
+                    {
+                        "AttributeName": "StatusSK",
+                        "KeyType": "RANGE"
+                    }
+                ],
+                "Projection": {
+                    "ProjectionType": "INCLUDE",
+                    "NonKeyAttributes": [
+                        "CustomerId",
+                        "VehicleId",
+                        "CreatedAt",
+                        "UpdatedAt"
+                    ]
+                }
+            }
+        ]
+    }
+}

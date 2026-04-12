@@ -1,0 +1,80 @@
+{
+    "_comment": [
+        "Staff table — shop employees scoped per tenant.",
+        "",
+        "Key pattern:",
+        "  PK = TENANT#<tenantId>   SK = STAFF#<staffId>",
+        "",
+        "GSIs:",
+        "  GSI-StaffByUser   : UserId (PK)              — reverse lookup by Cognito sub",
+        "                      Used by auth.py to resolve tenantId from JWT sub.",
+        "",
+        "  GSI-StaffByTenant : TenantId (PK)  SK (SK)   — list all staff for a tenant",
+        "                      Covers cross-tenant admin views and cases where the",
+        "                      main-table PK prefix is not available as a query input.",
+        "                      For in-tenant queries, prefer the main table:",
+        "                        PK = TENANT#x AND begins_with(SK, 'STAFF#')"
+    ],
+    "Table": {
+        "AttributeDefinitions": [
+            {
+                "AttributeName": "PK",
+                "AttributeType": "S"
+            },
+            {
+                "AttributeName": "SK",
+                "AttributeType": "S"
+            },
+            {
+                "AttributeName": "TenantId",
+                "AttributeType": "S"
+            },
+            {
+                "AttributeName": "UserId",
+                "AttributeType": "S"
+            }
+        ],
+        "TableName": "Staff",
+        "KeySchema": [
+            {
+                "AttributeName": "PK",
+                "KeyType": "HASH"
+            },
+            {
+                "AttributeName": "SK",
+                "KeyType": "RANGE"
+            }
+        ],
+        "BillingMode": "PAY_PER_REQUEST",
+        "GlobalSecondaryIndexes": [
+            {
+                "IndexName": "GSI-StaffByUser",
+                "KeySchema": [
+                    {
+                        "AttributeName": "UserId",
+                        "KeyType": "HASH"
+                    }
+                ],
+                "Projection": {
+                    "ProjectionType": "ALL"
+                }
+            },
+            {
+                "IndexName": "GSI-StaffByTenant",
+                "KeySchema": [
+                    {
+                        "AttributeName": "TenantId",
+                        "KeyType": "HASH"
+                    },
+                    {
+                        "AttributeName": "SK",
+                        "KeyType": "RANGE"
+                    }
+                ],
+                "Projection": {
+                    "ProjectionType": "ALL"
+                }
+            }
+        ]
+    }
+}
