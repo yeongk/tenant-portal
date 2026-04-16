@@ -1,0 +1,40 @@
+{
+    "Table": {
+        "AttributeDefinitions": [
+            {
+                "AttributeName": "PK",
+                "AttributeType": "S"
+            },
+            {
+                "AttributeName": "SK",
+                "AttributeType": "S"
+            }
+        ],
+        "TableName": "Tenant",
+        "KeySchema": [
+            {
+                "AttributeName": "PK",
+                "KeyType": "HASH"
+            },
+            {
+                "AttributeName": "SK",
+                "KeyType": "RANGE"
+            }
+        ],
+        "TableStatus": "ACTIVE",
+        "CreationDateTime": "2026-04-06T15:46:21.054000-04:00",
+        "ProvisionedThroughput": {
+            "NumberOfDecreasesToday": 0,
+            "ReadCapacityUnits": 0,
+            "WriteCapacityUnits": 0
+        },
+        "TableSizeBytes": 740,
+        "ItemCount": 2,
+        "TableArn": "arn:aws:dynamodb:us-east-1:146005904504:table/Tenant",
+        "TableId": "a349ecdd-fe85-43fd-b369-b64de7aae266",
+        "BillingModeSummary": {
+            "BillingMode": "PAY_PER_REQUEST",
+            "LastUpdateToPayPerRequestDateTime": "2026-04-06T15:46:21.054000-04:00"
+        }
+    }
+}
