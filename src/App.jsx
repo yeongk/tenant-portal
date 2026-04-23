@@ -1,5 +1,5 @@
-import React, { useEffect } from 'react'
-import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom'
+import React, { useEffect, useState } from 'react'
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import { ToastProvider } from './context/ToastContext'
 import ProtectedLayout from './layouts/ProtectedLayout'
@@ -11,17 +11,21 @@ import WorkOrders from './pages/WorkOrders'
 import WorkOrderDetail from './pages/WorkOrderDetail'
 import Settings from './pages/Settings'
 
-// ── Hash-token bootstrap ────────────────────────────────────────────────────
+// ── Hash-token bootstrap ──────────────────────────────────────────────────────
 //
-// When dms-porsche redirects here after a successful /saas/login it appends:
-//   /#token=<id_token>&tenant_id=<id>&shop_name=<name>
+// When dms-porsche redirects here after a successful login it appends a hash:
+//   /#token=<id_token>&tenant_id=<id>&shop_name=<n>
 //
-// This component reads the fragment on first render, hydrates AuthContext,
-// strips the hash from the URL (so refresh doesn't re-consume it), and
-// navigates to /dashboard.  If no token fragment is present it does nothing.
+// The session must be written to sessionStorage BEFORE the router renders so
+// that ProtectedLayout reads isAuthenticated:true on its very first render.
+// Writing through React state (login()) is async — the state update batches
+// and the layout renders with the old null session first, causing a redirect
+// to /login before the update lands.
 //
-// Placed inside <BrowserRouter> so useNavigate() is available, but outside
-// <AuthProvider> children so it can call login() before any route renders.
+// Solution: parse the hash and write sessionStorage synchronously here,
+// at module evaluation time (outside any component), before React mounts.
+// AuthContext reads sessionStorage in its useState initializer, so it will
+// have the session from the very first render.
 
 function decodeJwt(token) {
   try {
@@ -31,56 +35,49 @@ function decodeJwt(token) {
   }
 }
 
-function HashTokenBootstrap() {
-  const { login, isAuthenticated } = useAuth()
-  const navigate = useNavigate()
+// Run synchronously before any component mounts
+;(function bootstrapFromHash() {
+  const hash = window.location.hash.slice(1)
+  if (!hash) return
 
-  useEffect(() => {
-    // Only run once on mount; skip if already authenticated
-    if (isAuthenticated) return
+  const params  = new URLSearchParams(hash)
+  const idToken = params.get('token')
+  if (!idToken) return
 
-    const hash = window.location.hash.slice(1)  // strip leading '#'
-    if (!hash) return
+  const tenantId = params.get('tenant_id') ?? ''
+  const shopName = params.get('shop_name') ?? ''
+  const claims   = decodeJwt(idToken)
+  const userType = claims['custom:userType'] ?? 'STAFF'
 
-    const params    = new URLSearchParams(hash)
-    const idToken   = params.get('token')
-    const tenantId  = params.get('tenant_id') ?? ''
-    const shopName  = params.get('shop_name') ?? ''
+  // Write directly to sessionStorage — AuthContext will pick this up in its
+  // useState(() => sessionStorage.getItem('tp_sess')) initializer
+  try {
+    sessionStorage.setItem('tp_sess', JSON.stringify({
+      id_token:  idToken,
+      tenant_id: tenantId,
+      shop_name: shopName,
+      user_type: userType,
+    }))
+  } catch {
+    return
+  }
 
-    if (!idToken) return
+  // Strip the hash so the token doesn't linger in the URL bar and so that
+  // a page refresh doesn't try to re-consume an already-expired token
+  window.history.replaceState(null, '', window.location.pathname + window.location.search)
+})()
 
-    // Decode to get userType (ProtectedLayout requires 'STAFF')
-    const claims   = decodeJwt(idToken)
-    const userType = claims['custom:userType'] ?? 'STAFF'
-
-    // Hydrate AuthContext (writes to sessionStorage 'tp_sess')
-    login({ id_token: idToken, tenant_id: tenantId, shop_name: shopName, user_type: userType })
-
-    // Clear the fragment so the token doesn't linger in the URL bar
-    // replace() avoids adding a history entry
-    window.history.replaceState(null, '', window.location.pathname + window.location.search)
-
-    // Navigate into the portal
-    navigate('/dashboard', { replace: true })
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])   // intentionally empty — run once on mount only
-
-  return null
-}
-
-// ── App ────────────────────────────────────────────────────────────────────────
+// ── App ───────────────────────────────────────────────────────────────────────
 
 export default function App() {
   return (
     <AuthProvider>
       <ToastProvider>
         <BrowserRouter>
-          {/* Bootstrap session from hash token before any route renders */}
-          <HashTokenBootstrap />
           <Routes>
             <Route path="/login" element={<Login />} />
             <Route element={<ProtectedLayout />}>
-              <Route path="/" element={<Navigate to="/dashboard" replace />} />
+              <Route path="/"                  element={<Navigate to="/dashboard" replace />} />
               <Route path="/dashboard"         element={<Dashboard />} />
               <Route path="/staff"             element={<Staff />} />
               <Route path="/customers"         element={<Customers />} />
