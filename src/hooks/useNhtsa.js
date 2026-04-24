@@ -8,9 +8,10 @@
  * Endpoints used:
  *   Makes   : GET /vehicles/GetMakesForVehicleType/car?format=json
  *   Models  : GET /vehicles/GetModelsForMake/{make}?format=json
- *   Engines : GET /vehicles/GetModelsForMakeIdYear/makeId/{makeId}/modelyear/{year}/vehicletype/car?format=json
- *             → returns engine descriptions per variant (ElectromotiveForce, DisplacementCC, etc.)
- *             We pull EngineConfiguration + DisplacementL fields and deduplicate.
+ *   Engines : GET /vehicles/GetModelsForMakeIdYear/makeId/{id}/modelyear/{yr}/vehicletype/car?format=json
+ *             Fields used: EngineCylinders, DisplacementCC, FuelTypePrimary
+ *             (EngineConfiguration / DisplacementL are sparsely populated;
+ *              EngineCylinders + DisplacementCC are far more reliable.)
  */
 
 import { useState, useEffect } from 'react'
@@ -22,7 +23,6 @@ const cache = new Map()
 
 async function nhtsaFetch(url) {
   if (cache.has(url)) return cache.get(url)
-  // Return pending promise so concurrent callers share the same inflight request
   const promise = fetch(url)
     .then(r => { if (!r.ok) throw new Error(`NHTSA ${r.status}`); return r.json() })
     .then(d => d.Results ?? [])
@@ -30,6 +30,13 @@ async function nhtsaFetch(url) {
   cache.set(url, promise)
   return promise
 }
+
+// ── Year list (current year → 1900) — pure computation, no fetch needed ───────
+const CURRENT_YEAR = new Date().getFullYear()
+export const YEAR_OPTIONS = Array.from(
+  { length: CURRENT_YEAR - 1900 + 1 },
+  (_, i) => String(CURRENT_YEAR - i)
+)
 
 // ── Makes ─────────────────────────────────────────────────────────────────────
 export function useNhtsaMakes() {
@@ -47,7 +54,7 @@ export function useNhtsaMakes() {
           .sort((a, b) => a.name.localeCompare(b.name))
         setMakes(sorted)
       })
-      .catch(() => {}) // silently degrade; user can still type
+      .catch(() => {})
       .finally(() => live && setLoading(false))
     return () => { live = false }
   }, [])
@@ -55,7 +62,7 @@ export function useNhtsaMakes() {
   return { makes, loading }
 }
 
-// ── Models (depend on make name) ───────────────────────────────────────────────
+// ── Models (cascade from make name) ───────────────────────────────────────────
 export function useNhtsaModels(makeName) {
   const [models, setModels] = useState([])
   const [loading, setLoading] = useState(false)
@@ -64,12 +71,10 @@ export function useNhtsaModels(makeName) {
     if (!makeName) { setModels([]); return }
     let live = true
     setLoading(true)
-    const encoded = encodeURIComponent(makeName)
-    nhtsaFetch(`${BASE}/vehicles/GetModelsForMake/${encoded}?format=json`)
+    nhtsaFetch(`${BASE}/vehicles/GetModelsForMake/${encodeURIComponent(makeName)}?format=json`)
       .then(results => {
         if (!live) return
-        const sorted = [...new Set(results.map(r => r.Model_Name))].sort()
-        setModels(sorted)
+        setModels([...new Set(results.map(r => r.Model_Name))].sort())
       })
       .catch(() => {})
       .finally(() => live && setLoading(false))
@@ -79,31 +84,47 @@ export function useNhtsaModels(makeName) {
   return { models, loading }
 }
 
-// ── Engines (depend on makeId + year) ──────────────────────────────────────────
-// NHTSA doesn't have a dedicated engine endpoint; we use GetModelsForMakeIdYear
-// which returns vehicle variants with engine fields: EngineConfiguration,
-// DisplacementL, FuelTypePrimary. We combine them into readable strings.
+// ── Engines (cascade from makeId + year) ───────────────────────────────────────
+// Strategy: call GetModelsForMakeIdYear which returns one record per model
+// variant. Each record may carry EngineCylinders, DisplacementCC, and
+// FuelTypePrimary. We build a human-readable label from those three fields
+// (e.g. "6-cyl 3500cc Gasoline") and deduplicate across all variants.
+// Falls back to FuelTypePrimary-only labels when cylinder/displacement are null.
 export function useNhtsaEngines(makeId, year) {
   const [engines, setEngines] = useState([])
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
-    if (!makeId || !year || String(year).length !== 4) { setEngines([]); return }
+    if (!makeId || !year) { setEngines([]); return }
     let live = true
     setLoading(true)
-    const url = `${BASE}/vehicles/GetModelsForMakeIdYear/makeId/${makeId}/modelyear/${year}/vehicletype/car?format=json`
+    const url =
+      `${BASE}/vehicles/GetModelsForMakeIdYear/makeId/${makeId}/modelyear/${year}/vehicletype/car?format=json`
     nhtsaFetch(url)
       .then(results => {
         if (!live) return
-        const set = new Set()
+
+        const labelSet = new Set()
+
         results.forEach(r => {
-          const cfg  = r.EngineConfiguration  || ''
-          const disp = r.DisplacementL ? `${parseFloat(r.DisplacementL).toFixed(1)}L` : ''
+          const cyl  = r.EngineCylinders ? `${r.EngineCylinders}-cyl` : ''
+          const cc   = r.DisplacementCC  ? `${Math.round(Number(r.DisplacementCC))}cc` : ''
           const fuel = r.FuelTypePrimary || ''
-          const label = [cfg, disp, fuel].filter(Boolean).join(' ').trim()
-          if (label) set.add(label)
+
+          // Build a label from whatever fields are available
+          const parts = [cyl, cc, fuel].filter(Boolean)
+          if (parts.length > 0) labelSet.add(parts.join(' '))
         })
-        setEngines([...set].sort())
+
+        // If NHTSA returned records but all engine fields were null,
+        // surface at least the fuel types to give the user something.
+        if (labelSet.size === 0 && results.length > 0) {
+          results.forEach(r => {
+            if (r.FuelTypePrimary) labelSet.add(r.FuelTypePrimary)
+          })
+        }
+
+        setEngines([...labelSet].sort())
       })
       .catch(() => {})
       .finally(() => live && setLoading(false))

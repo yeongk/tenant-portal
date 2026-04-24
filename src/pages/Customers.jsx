@@ -1,17 +1,30 @@
 import React, { useEffect, useState } from 'react'
 import { useApi } from '../hooks/useApi'
 import { useToast } from '../context/ToastContext'
-import { useNhtsaMakes, useNhtsaModels, useNhtsaEngines } from '../hooks/useNhtsa'
+import {
+  YEAR_OPTIONS,
+  useNhtsaMakes,
+  useNhtsaModels,
+  useNhtsaEngines,
+} from '../hooks/useNhtsa'
 
-const emptyV = () => ({ year: '', makeId: '', make: '', model: '', engine: '', plate: '', vin: '', nickname: '' })
+const emptyV = () => ({
+  year: '', makeId: '', make: '', model: '', engine: '',
+  plate: '', vin: '', nickname: '',
+})
 
-// ── Single vehicle row with cascading NHTSA dropdowns ─────────────────────────
+// ── Single vehicle row ─────────────────────────────────────────────────────────
 function VRow({ v, i, onChange, onRemove }) {
   const set = (k, val) => onChange(i, { ...v, [k]: val })
 
-  const { makes, loading: makesLoading } = useNhtsaMakes()
+  const { makes, loading: makesLoading }   = useNhtsaMakes()
   const { models, loading: modelsLoading } = useNhtsaModels(v.make)
   const { engines, loading: enginesLoading } = useNhtsaEngines(v.makeId, v.year)
+
+  const handleYearChange = (e) => {
+    // Reset engine when year changes (engine list depends on year)
+    onChange(i, { ...v, year: e.target.value, engine: '' })
+  }
 
   const handleMakeChange = (e) => {
     const selected = makes.find(m => m.name === e.target.value)
@@ -21,6 +34,24 @@ function VRow({ v, i, onChange, onRemove }) {
   const handleModelChange = (e) => {
     onChange(i, { ...v, model: e.target.value, engine: '' })
   }
+
+  // Helper: show a small inline loading badge next to label
+  const Loading = () => (
+    <span style={{ fontSize: 11, color: 'var(--muted)', marginLeft: 4 }}>loading…</span>
+  )
+
+  // Determine if engine select should be disabled
+  const engineReady = Boolean(v.makeId && v.year)
+  const engineDisabled = !engineReady || enginesLoading
+  const enginePlaceholder = !v.makeId
+    ? 'Select Make first'
+    : !v.year
+    ? 'Select Year first'
+    : enginesLoading
+    ? 'Loading…'
+    : engines.length === 0
+    ? 'None on record'
+    : 'Select…'
 
   return (
     <div style={{ border: '1px solid var(--border)', borderRadius: 6, padding: 12, marginBottom: 10 }}>
@@ -38,20 +69,21 @@ function VRow({ v, i, onChange, onRemove }) {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
-        {/* Year — free text; drives engine lookup */}
+
+        {/* Year — dropdown, current year → 1900 */}
         <div className="fg">
           <label>Year</label>
-          <input
-            value={v.year}
-            onChange={e => set('year', e.target.value)}
-            placeholder="1973"
-            maxLength={4}
-          />
+          <select value={v.year} onChange={handleYearChange}>
+            <option value="">Select…</option>
+            {YEAR_OPTIONS.map(yr => (
+              <option key={yr} value={yr}>{yr}</option>
+            ))}
+          </select>
         </div>
 
         {/* Make — NHTSA dropdown */}
         <div className="fg">
-          <label>Make {makesLoading && <span style={{ fontSize: 11, color: 'var(--muted)' }}>loading…</span>}</label>
+          <label>Make {makesLoading && <Loading />}</label>
           <select value={v.make} onChange={handleMakeChange} disabled={makesLoading}>
             <option value="">Select…</option>
             {makes.map(m => (
@@ -62,9 +94,9 @@ function VRow({ v, i, onChange, onRemove }) {
 
         {/* Model — cascades from Make */}
         <div className="fg">
-          <label>Model {modelsLoading && <span style={{ fontSize: 11, color: 'var(--muted)' }}>loading…</span>}</label>
+          <label>Model {modelsLoading && <Loading />}</label>
           <select value={v.model} onChange={handleModelChange} disabled={!v.make || modelsLoading}>
-            <option value="">Select…</option>
+            <option value="">{!v.make ? 'Select Make first' : 'Select…'}</option>
             {models.map(m => (
               <option key={m} value={m}>{m}</option>
             ))}
@@ -73,16 +105,19 @@ function VRow({ v, i, onChange, onRemove }) {
 
         {/* Engine — cascades from Make + Year */}
         <div className="fg">
-          <label>
-            Engine {enginesLoading && <span style={{ fontSize: 11, color: 'var(--muted)' }}>loading…</span>}
-          </label>
-          <select value={v.engine} onChange={e => set('engine', e.target.value)} disabled={!v.makeId || !v.year || enginesLoading}>
-            <option value="">Select…</option>
+          <label>Engine {enginesLoading && <Loading />}</label>
+          <select
+            value={v.engine}
+            onChange={e => set('engine', e.target.value)}
+            disabled={engineDisabled}
+          >
+            <option value="">{enginePlaceholder}</option>
             {engines.map(eng => (
               <option key={eng} value={eng}>{eng}</option>
             ))}
-            {/* Always allow a manual fallback */}
-            {!enginesLoading && engines.length > 0 && <option value="Other">Other</option>}
+            {!enginesLoading && engines.length > 0 && (
+              <option value="Other">Other</option>
+            )}
           </select>
         </div>
 
@@ -95,6 +130,7 @@ function VRow({ v, i, onChange, onRemove }) {
           <label>VIN</label>
           <input value={v.vin} onChange={e => set('vin', e.target.value)} />
         </div>
+
       </div>
 
       <div className="fg">
@@ -114,9 +150,9 @@ function Modal({ onClose, onDone }) {
   const [cl, setCl] = useState(true)
   const [loading, setLoading] = useState(false)
 
-  const sf = (k, v) => setF(x => ({ ...x, [k]: v }))
-  const upV = (i, v) => setV(vs => vs.map((x, j) => j === i ? v : x))
-  const rmV = (i) => setV(vs => vs.filter((_, j) => j !== i))
+  const sf  = (k, val) => setF(x => ({ ...x, [k]: val }))
+  const upV = (i, val) => setV(vs => vs.map((x, j) => j === i ? val : x))
+  const rmV = (i)      => setV(vs => vs.filter((_, j) => j !== i))
 
   const submit = async (e) => {
     e.preventDefault()
@@ -143,9 +179,18 @@ function Modal({ onClose, onDone }) {
         </div>
 
         <form onSubmit={submit}>
-          <div className="fg"><label>Full Name</label><input value={f.full_name} onChange={e => sf('full_name', e.target.value)} required /></div>
-          <div className="fg"><label>Email</label><input type="email" value={f.email} onChange={e => sf('email', e.target.value)} required /></div>
-          <div className="fg"><label>Phone</label><input value={f.phone} onChange={e => sf('phone', e.target.value)} /></div>
+          <div className="fg">
+            <label>Full Name</label>
+            <input value={f.full_name} onChange={e => sf('full_name', e.target.value)} required />
+          </div>
+          <div className="fg">
+            <label>Email</label>
+            <input type="email" value={f.email} onChange={e => sf('email', e.target.value)} required />
+          </div>
+          <div className="fg">
+            <label>Phone</label>
+            <input value={f.phone} onChange={e => sf('phone', e.target.value)} />
+          </div>
 
           <div style={{ fontWeight: 500, fontSize: 13, marginBottom: 8 }}>Vehicles</div>
           {vehicles.map((v, i) => (
@@ -162,13 +207,21 @@ function Modal({ onClose, onDone }) {
           </button>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
-            <input type="checkbox" id="cl" checked={cl} onChange={e => setCl(e.target.checked)} style={{ width: 'auto' }} />
-            <label htmlFor="cl" style={{ fontWeight: 400, cursor: 'pointer' }}>Create portal login for this customer</label>
+            <input
+              type="checkbox" id="cl" checked={cl}
+              onChange={e => setCl(e.target.checked)}
+              style={{ width: 'auto' }}
+            />
+            <label htmlFor="cl" style={{ fontWeight: 400, cursor: 'pointer' }}>
+              Create portal login for this customer
+            </label>
           </div>
 
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
             <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
-            <button type="submit" className="btn btn-primary" disabled={loading}>{loading ? 'Saving…' : 'Add Customer'}</button>
+            <button type="submit" className="btn btn-primary" disabled={loading}>
+              {loading ? 'Saving…' : 'Add Customer'}
+            </button>
           </div>
         </form>
       </div>
@@ -206,7 +259,9 @@ export default function Customers() {
           <div className="empty"><strong>No customers yet</strong>Add your first customer.</div>
         ) : (
           <table>
-            <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Vehicles</th></tr></thead>
+            <thead>
+              <tr><th>Name</th><th>Email</th><th>Phone</th><th>Vehicles</th></tr>
+            </thead>
             <tbody>
               {customers.map(c => (
                 <tr key={c.customer_id}>
