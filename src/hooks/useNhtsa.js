@@ -1,17 +1,20 @@
 /**
  * useNhtsa.js
  * -----------
- * Thin wrapper around the NHTSA vPIC public API.
- * All results are cached in a module-level Map so repeated renders
- * (or multiple VRow instances) never re-fetch the same data.
+ * Wrapper around the NHTSA vPIC public API for Make and Model data.
+ * All fetch results are cached in a module-level Map — one fetch per
+ * unique URL across all component instances and re-renders.
+ *
+ * Engine data is NOT sourced from NHTSA. The vPIC endpoint
+ * (GetModelsForMakeIdYear) returns null for EngineCylinders /
+ * DisplacementCC / FuelTypePrimary on the vast majority of records.
+ * Engine options are instead provided as a static curated list
+ * (ENGINE_OPTIONS) that covers every configuration a restoration shop
+ * will realistically encounter.
  *
  * Endpoints used:
- *   Makes   : GET /vehicles/GetMakesForVehicleType/car?format=json
- *   Models  : GET /vehicles/GetModelsForMake/{make}?format=json
- *   Engines : GET /vehicles/GetModelsForMakeIdYear/makeId/{id}/modelyear/{yr}/vehicletype/car?format=json
- *             Fields used: EngineCylinders, DisplacementCC, FuelTypePrimary
- *             (EngineConfiguration / DisplacementL are sparsely populated;
- *              EngineCylinders + DisplacementCC are far more reliable.)
+ *   Makes  : GET /vehicles/GetMakesForVehicleType/car?format=json
+ *   Models : GET /vehicles/GetModelsForMake/{make}?format=json
  */
 
 import { useState, useEffect } from 'react'
@@ -31,12 +34,48 @@ async function nhtsaFetch(url) {
   return promise
 }
 
-// ── Year list (current year → 1900) — pure computation, no fetch needed ───────
+// ── Year list (current year → 1900) ───────────────────────────────────────────
 const CURRENT_YEAR = new Date().getFullYear()
 export const YEAR_OPTIONS = Array.from(
   { length: CURRENT_YEAR - 1900 + 1 },
   (_, i) => String(CURRENT_YEAR - i)
 )
+
+// ── Static engine options ─────────────────────────────────────────────────────
+// Curated for high-end / classic / exotic restoration shops.
+// Grouped by layout then displacement for easy scanning.
+export const ENGINE_OPTIONS = [
+  // Flat / Boxer
+  'Flat-2 (Boxing Twin)',
+  'Flat-4',
+  'Flat-6',
+  'Flat-8',
+  // Inline
+  'Inline-3',
+  'Inline-4',
+  'Inline-5',
+  'Inline-6',
+  'Inline-8',
+  // V configurations
+  'V6',
+  'V8',
+  'V10',
+  'V12',
+  'V16',
+  // Rotary
+  'Rotary (Single Rotor)',
+  'Rotary (Twin Rotor)',
+  'Rotary (Triple Rotor)',
+  // Electric / Hybrid
+  'Electric (Single Motor)',
+  'Electric (Dual Motor)',
+  'Electric (Tri Motor)',
+  'Hybrid – Inline-4',
+  'Hybrid – V6',
+  'Hybrid – V8',
+  // Other
+  'Other',
+]
 
 // ── Makes ─────────────────────────────────────────────────────────────────────
 export function useNhtsaMakes() {
@@ -82,54 +121,4 @@ export function useNhtsaModels(makeName) {
   }, [makeName])
 
   return { models, loading }
-}
-
-// ── Engines (cascade from makeId + year) ───────────────────────────────────────
-// Strategy: call GetModelsForMakeIdYear which returns one record per model
-// variant. Each record may carry EngineCylinders, DisplacementCC, and
-// FuelTypePrimary. We build a human-readable label from those three fields
-// (e.g. "6-cyl 3500cc Gasoline") and deduplicate across all variants.
-// Falls back to FuelTypePrimary-only labels when cylinder/displacement are null.
-export function useNhtsaEngines(makeId, year) {
-  const [engines, setEngines] = useState([])
-  const [loading, setLoading] = useState(false)
-
-  useEffect(() => {
-    if (!makeId || !year) { setEngines([]); return }
-    let live = true
-    setLoading(true)
-    const url =
-      `${BASE}/vehicles/GetModelsForMakeIdYear/makeId/${makeId}/modelyear/${year}/vehicletype/car?format=json`
-    nhtsaFetch(url)
-      .then(results => {
-        if (!live) return
-
-        const labelSet = new Set()
-
-        results.forEach(r => {
-          const cyl  = r.EngineCylinders ? `${r.EngineCylinders}-cyl` : ''
-          const cc   = r.DisplacementCC  ? `${Math.round(Number(r.DisplacementCC))}cc` : ''
-          const fuel = r.FuelTypePrimary || ''
-
-          // Build a label from whatever fields are available
-          const parts = [cyl, cc, fuel].filter(Boolean)
-          if (parts.length > 0) labelSet.add(parts.join(' '))
-        })
-
-        // If NHTSA returned records but all engine fields were null,
-        // surface at least the fuel types to give the user something.
-        if (labelSet.size === 0 && results.length > 0) {
-          results.forEach(r => {
-            if (r.FuelTypePrimary) labelSet.add(r.FuelTypePrimary)
-          })
-        }
-
-        setEngines([...labelSet].sort())
-      })
-      .catch(() => {})
-      .finally(() => live && setLoading(false))
-    return () => { live = false }
-  }, [makeId, year])
-
-  return { engines, loading }
 }
