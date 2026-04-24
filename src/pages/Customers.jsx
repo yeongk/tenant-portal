@@ -3,9 +3,9 @@ import { useApi } from '../hooks/useApi'
 import { useToast } from '../context/ToastContext'
 import {
   YEAR_OPTIONS,
+  ENGINE_OPTIONS,
   useNhtsaMakes,
   useNhtsaModels,
-  useNhtsaEngines,
 } from '../hooks/useNhtsa'
 
 const emptyV = () => ({
@@ -19,11 +19,9 @@ function VRow({ v, i, onChange, onRemove }) {
 
   const { makes, loading: makesLoading }   = useNhtsaMakes()
   const { models, loading: modelsLoading } = useNhtsaModels(v.make)
-  const { engines, loading: enginesLoading } = useNhtsaEngines(v.makeId, v.year)
 
   const handleYearChange = (e) => {
-    // Reset engine when year changes (engine list depends on year)
-    onChange(i, { ...v, year: e.target.value, engine: '' })
+    onChange(i, { ...v, year: e.target.value })
   }
 
   const handleMakeChange = (e) => {
@@ -32,26 +30,12 @@ function VRow({ v, i, onChange, onRemove }) {
   }
 
   const handleModelChange = (e) => {
-    onChange(i, { ...v, model: e.target.value, engine: '' })
+    onChange(i, { ...v, model: e.target.value })
   }
 
-  // Helper: show a small inline loading badge next to label
   const Loading = () => (
     <span style={{ fontSize: 11, color: 'var(--muted)', marginLeft: 4 }}>loading…</span>
   )
-
-  // Determine if engine select should be disabled
-  const engineReady = Boolean(v.makeId && v.year)
-  const engineDisabled = !engineReady || enginesLoading
-  const enginePlaceholder = !v.makeId
-    ? 'Select Make first'
-    : !v.year
-    ? 'Select Year first'
-    : enginesLoading
-    ? 'Loading…'
-    : engines.length === 0
-    ? 'None on record'
-    : 'Select…'
 
   return (
     <div style={{ border: '1px solid var(--border)', borderRadius: 6, padding: 12, marginBottom: 10 }}>
@@ -92,7 +76,7 @@ function VRow({ v, i, onChange, onRemove }) {
           </select>
         </div>
 
-        {/* Model — cascades from Make */}
+        {/* Model — cascades from Make via NHTSA */}
         <div className="fg">
           <label>Model {modelsLoading && <Loading />}</label>
           <select value={v.model} onChange={handleModelChange} disabled={!v.make || modelsLoading}>
@@ -103,21 +87,14 @@ function VRow({ v, i, onChange, onRemove }) {
           </select>
         </div>
 
-        {/* Engine — cascades from Make + Year */}
+        {/* Engine — static curated list, always available */}
         <div className="fg">
-          <label>Engine {enginesLoading && <Loading />}</label>
-          <select
-            value={v.engine}
-            onChange={e => set('engine', e.target.value)}
-            disabled={engineDisabled}
-          >
-            <option value="">{enginePlaceholder}</option>
-            {engines.map(eng => (
+          <label>Engine</label>
+          <select value={v.engine} onChange={e => set('engine', e.target.value)}>
+            <option value="">Select…</option>
+            {ENGINE_OPTIONS.map(eng => (
               <option key={eng} value={eng}>{eng}</option>
             ))}
-            {!enginesLoading && engines.length > 0 && (
-              <option value="Other">Other</option>
-            )}
           </select>
         </div>
 
@@ -157,7 +134,6 @@ function Modal({ onClose, onDone }) {
   const submit = async (e) => {
     e.preventDefault()
     setLoading(true)
-    // Strip internal makeId before sending to API
     const vehiclesPayload = vehicles.map(({ makeId, ...rest }) => rest)
     try {
       await post('/customers', { ...f, vehicles: vehiclesPayload, create_login: cl })
