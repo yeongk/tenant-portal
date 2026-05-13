@@ -1,0 +1,40 @@
+/**
+ * theme.base.css
+ *
+ * Base CSS custom-property definitions for the tenant portal.
+ * Branding-related variables (--brand-*, --accent, --accent-h) are the only
+ * ones expected to change between tenants. All other tokens (layout, radius,
+ * shadow, typography) are stable across all tenants and live here.
+ *
+ * At runtime a tenant-specific override sheet is injected AFTER this file:
+ *   theme.tenant.<published_timestamp>.css
+ * That sheet only redefines the --brand-* / --accent variables, leaving
+ * everything else from this file intact.
+ *
+ * Do NOT import this file directly in components; index.css imports it.
+ */
+
+:root {
+  /* ── Branding (overridden by tenant theme sheet) ─────────────────────── */
+  --brand-primary:   #3d7a28;   /* main accent / buttons / active nav */
+  --brand-primary-h: #2f6020;   /* hover state of primary */
+  --brand-on-primary:#ffffff;   /* text on primary-colored surfaces */
+  --brand-logo-url:  none;      /* url('…') or none */
+
+  /* Aliases used throughout the app — point to brand tokens so a single
+     tenant theme override cascades to all usage sites automatically. */
+  --accent:   var(--brand-primary);
+  --accent-h: var(--brand-primary-h);
+
+  /* ── Layout ──────────────────────────────────────────────────────────── */
+  --bg:       #f7f7f5;
+  --surface:  #ffffff;
+  --border:   #e4e3de;
+  --text:     #1a1a18;
+  --muted:    #6b6b65;
+  --danger:   #b91c1c;
+  --nav-w:    216px;
+  --topbar-h: 52px;
+  --radius:   6px;
+  --shadow:   0 1px 3px rgba(0,0,0,.07);
+}
