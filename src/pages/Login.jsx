@@ -5,10 +5,27 @@ import { useAuth } from '../context/AuthContext'
 const BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:3000'
 const API  = `${BASE}/api`
 
+// ── helpers ───────────────────────────────────────────────────────────────────
+
 function decodeJwt(t) {
   try { return JSON.parse(atob(t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))) }
   catch { return {} }
 }
+
+/**
+ * Resolve the highest-privilege Cognito group from the ID token claims.
+ * Must stay in sync with resolveGroup() in App.jsx (used for hash-bootstrap path).
+ * Priority: SHOP_ADMIN > SUPERVISOR > MECHANIC
+ */
+function resolveGroup(claims) {
+  const groups = claims['cognito:groups'] ?? []
+  if (groups.includes('SHOP_ADMIN')) return 'SHOP_ADMIN'
+  if (groups.includes('SUPERVISOR')) return 'SUPERVISOR'
+  if (groups.includes('MECHANIC'))   return 'MECHANIC'
+  return ''
+}
+
+// ── component ─────────────────────────────────────────────────────────────────
 
 export default function Login() {
   const { login } = useAuth()
@@ -20,11 +37,29 @@ export default function Login() {
   const [error,    setError]    = useState('')
   const [loading,  setLoading]  = useState(false)
 
+  /**
+   * Called after both direct login and MFA completion.
+   * Decodes the ID token to extract user_type (custom:userType) and
+   * cog_group (highest cognito:groups entry), then stores both in the
+   * session so AuthContext.isAdmin and Settings gate work correctly.
+   */
   const finish = (data) => {
-    const c  = decodeJwt(data.id_token)
-    const ut = c['custom:userType'] ?? ''
-    if (ut !== 'STAFF') { setError('Access restricted to shop staff accounts'); return }
-    login({ id_token: data.id_token, tenant_id: data.tenant_id, shop_name: data.shop_name, user_type: ut })
+    const claims   = decodeJwt(data.id_token)
+    const userType = claims['custom:userType'] ?? ''
+    const cogGroup = resolveGroup(claims)
+
+    if (userType !== 'STAFF') {
+      setError('Access restricted to shop staff accounts')
+      return
+    }
+
+    login({
+      id_token:  data.id_token,
+      tenant_id: data.tenant_id,
+      shop_name: data.shop_name,
+      user_type: userType,
+      cog_group: cogGroup,    // 'SHOP_ADMIN' | 'SUPERVISOR' | 'MECHANIC'
+    })
     nav('/dashboard')
   }
 
