@@ -2,6 +2,25 @@ import React, { createContext, useContext, useState, useCallback } from 'react'
 
 const Ctx = createContext(null)
 
+/**
+ * Session shape stored in sessionStorage under 'tp_sess':
+ * {
+ *   id_token:  string   — Cognito ID token (JWT)
+ *   tenant_id: string   — tenant slug, e.g. 'porsche-sf'
+ *   shop_name: string   — human-readable shop name
+ *   user_type: string   — 'STAFF' | 'CLIENT'  (custom:userType claim)
+ *   cog_group: string   — highest Cognito group for STAFF users:
+ *                         'SHOP_ADMIN' | 'SUPERVISOR' | 'MECHANIC'
+ *                         Empty string for CLIENT users or when group
+ *                         cannot be determined.
+ * }
+ *
+ * Access control rules:
+ *   Portal entry   : user_type === 'STAFF'
+ *   Branding edit  : user_type === 'STAFF' && cog_group === 'SHOP_ADMIN'
+ *   All other pages: any authenticated STAFF member
+ */
+
 export function AuthProvider({ children }) {
   const [session, setSession] = useState(() => {
     try {
@@ -26,10 +45,9 @@ export function AuthProvider({ children }) {
       tenantId:  session?.tenant_id  ?? '',
       shopName:  session?.shop_name  ?? '',
       idToken:   session?.id_token   ?? '',
-      // userType mirrors custom:userType from the Cognito ID token —
-      // 'STAFF' for all staff; role distinction comes from cognito:groups
-      // which is mapped by auth.py to the session's user_type field.
-      userType:  session?.user_type  ?? '',
+      userType:  session?.user_type  ?? '',   // 'STAFF' | 'CLIENT'
+      cogGroup:  session?.cog_group  ?? '',   // 'SHOP_ADMIN' | 'SUPERVISOR' | 'MECHANIC'
+      isAdmin:   session?.user_type === 'STAFF' && session?.cog_group === 'SHOP_ADMIN',
       login,
       logout,
     }}>
