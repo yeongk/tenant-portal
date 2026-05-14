@@ -4,43 +4,32 @@
  * Utilities for generating, injecting, uploading, and loading tenant
  * branding theme CSS files.
  *
- * Theme file naming convention:
- *   theme.tenant.<published_timestamp>.css
- *
- * The CSS file only contains overrides for the --brand-* / --accent
- * variables defined in theme.base.css. All other tokens remain at their
- * base values so the layout is never broken by a bad brand color.
- *
- * Flow:
- *   1. SHOP_ADMIN edits branding in Settings → live preview via injectTheme()
- *   2. "Publish" → generateThemeCss() → uploadThemeCss() → S3
- *   3. Backend stores filename in Tenant DynamoDB record (brand_css_file)
- *   4. On portal boot, loadTenantTheme() fetches the file from S3 and injects it
+ * Upload protocol: JSON (not multipart/form-data).
+ * API Gateway v2 + Lambda (Mangum) can silently corrupt or fail to parse
+ * multipart bodies without extra binary media type configuration.  Sending
+ * plain JSON avoids the issue entirely — the logo is base64-encoded in the
+ * browser and decoded server-side before writing to S3.
  */
 
 const API = `${import.meta.env.VITE_API_URL ?? 'http://localhost:3000'}/api`
 const STYLE_TAG_ID = 'tenant-theme'
 
 // ── Colour palette ────────────────────────────────────────────────────────────
-// Each entry: { label, primary, primaryHover }
-// primaryHover is computed as a slightly darker shade.
 
 export const THEME_COLORS = [
-  { id: 'forest',    label: 'Forest Green',   primary: '#3d7a28', primaryHover: '#2f6020' },
-  { id: 'midnight',  label: 'Midnight Blue',  primary: '#1e3a8a', primaryHover: '#162d6e' },
-  { id: 'crimson',   label: 'Crimson Red',    primary: '#b91c1c', primaryHover: '#991b1b' },
-  { id: 'charcoal',  label: 'Charcoal',       primary: '#374151', primaryHover: '#1f2937' },
-  { id: 'slate',     label: 'Slate Blue',     primary: '#475569', primaryHover: '#334155' },
-  { id: 'indigo',    label: 'Indigo',         primary: '#4338ca', primaryHover: '#3730a3' },
-  { id: 'teal',      label: 'Teal',           primary: '#0f766e', primaryHover: '#0d6360' },
-  { id: 'amber',     label: 'Amber',          primary: '#b45309', primaryHover: '#92400e' },
-  { id: 'rose',      label: 'Rose',           primary: '#be123c', primaryHover: '#9f1239' },
-  { id: 'custom',    label: 'Custom…',        primary: '',        primaryHover: '' },
+  { id: 'forest',   label: 'Forest Green',  primary: '#3d7a28', primaryHover: '#2f6020' },
+  { id: 'midnight', label: 'Midnight Blue', primary: '#1e3a8a', primaryHover: '#162d6e' },
+  { id: 'crimson',  label: 'Crimson Red',   primary: '#b91c1c', primaryHover: '#991b1b' },
+  { id: 'charcoal', label: 'Charcoal',      primary: '#374151', primaryHover: '#1f2937' },
+  { id: 'slate',    label: 'Slate Blue',    primary: '#475569', primaryHover: '#334155' },
+  { id: 'indigo',   label: 'Indigo',        primary: '#4338ca', primaryHover: '#3730a3' },
+  { id: 'teal',     label: 'Teal',          primary: '#0f766e', primaryHover: '#0d6360' },
+  { id: 'amber',    label: 'Amber',         primary: '#b45309', primaryHover: '#92400e' },
+  { id: 'rose',     label: 'Rose',          primary: '#be123c', primaryHover: '#9f1239' },
+  { id: 'custom',   label: 'Custom…',       primary: '',        primaryHover: '' },
 ]
 
-/**
- * Derive a hover colour from a hex primary by darkening it ~12 %.
- */
+/** Darken a hex colour by ~12% to derive a hover shade. */
 export function deriveHover(hex) {
   const c = hex.replace('#', '')
   if (c.length !== 6) return hex
@@ -50,16 +39,6 @@ export function deriveHover(hex) {
 
 // ── CSS generation ────────────────────────────────────────────────────────────
 
-/**
- * Generate the content of a tenant theme CSS file.
- *
- * @param {object} opts
- * @param {string} opts.primary      - hex colour, e.g. '#3d7a28'
- * @param {string} opts.primaryHover - hex colour
- * @param {string} [opts.logoUrl]    - full public URL to the logo, or ''
- * @param {string} opts.tenantId
- * @param {number} opts.timestamp    - Unix ms timestamp
- */
 export function generateThemeCss({ primary, primaryHover, logoUrl, tenantId, timestamp }) {
   const logoLine = logoUrl
     ? `  --brand-logo-url:   url('${logoUrl}');`
@@ -74,19 +53,14 @@ export function generateThemeCss({ primary, primaryHover, logoUrl, tenantId, tim
     `  --brand-primary-h: ${primaryHover};`,
     `  --brand-on-primary:#ffffff;`,
     logoLine,
-    `  /* cascade to utility aliases */`,
     `  --accent:   var(--brand-primary);`,
     `  --accent-h: var(--brand-primary-h);`,
     `}`,
   ].join('\n') + '\n'
 }
 
-// ── Live preview injection ────────────────────────────────────────────────────
+// ── Live preview ──────────────────────────────────────────────────────────────
 
-/**
- * Inject (or replace) a <style> tag in the document head with the given
- * CSS text. Used for live preview while the admin is editing branding.
- */
 export function injectTheme(cssText) {
   let tag = document.getElementById(STYLE_TAG_ID)
   if (!tag) {
@@ -97,9 +71,6 @@ export function injectTheme(cssText) {
   tag.textContent = cssText
 }
 
-/**
- * Remove the injected preview theme (revert to base defaults).
- */
 export function removeTheme() {
   const tag = document.getElementById(STYLE_TAG_ID)
   if (tag) tag.remove()
@@ -108,25 +79,48 @@ export function removeTheme() {
 // ── Upload ────────────────────────────────────────────────────────────────────
 
 /**
- * Upload a generated theme CSS string and optional logo file to the backend.
- * Returns the published filename and optional logo URL.
+ * Read a File object as a base64 string.
+ */
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload  = () => {
+      // result is "data:<mime>;base64,<data>" — strip the prefix
+      resolve(reader.result.split(',')[1])
+    }
+    reader.onerror = () => reject(new Error('Failed to read logo file'))
+    reader.readAsDataURL(file)
+  })
+}
+
+/**
+ * Upload theme CSS and optional logo to the backend as JSON.
  *
- * @param {string}      cssText   - content of the theme CSS file
- * @param {string}      filename  - e.g. 'theme.tenant.1715640000000.css'
- * @param {File|null}   logoFile  - browser File object, or null
- * @param {string}      idToken   - Cognito ID token for Authorization header
- * @returns {Promise<{ cssFile: string, logoUrl: string }>}
+ * The logo File is base64-encoded in the browser before sending.
+ * The backend decodes it and writes it to S3.
+ *
+ * @param {string}    cssText  - content of the theme CSS file
+ * @param {string}    filename - e.g. 'theme.tenant.1715640000000.css'
+ * @param {File|null} logoFile - browser File object, or null if unchanged
+ * @param {string}    idToken  - Cognito ID token for Authorization header
+ * @returns {Promise<{ css_file: string, logo_url: string }>}
  */
 export async function uploadTheme(cssText, filename, logoFile, idToken) {
-  const formData = new FormData()
-  formData.append('css_text',  cssText)
-  formData.append('filename',  filename)
-  if (logoFile) formData.append('logo', logoFile)
+  const body = { css_text: cssText, filename }
+
+  if (logoFile) {
+    body.logo_b64       = await fileToBase64(logoFile)
+    body.logo_mime_type = logoFile.type || 'image/png'
+    body.logo_filename  = logoFile.name
+  }
 
   const res = await fetch(`${API}/tenant/branding`, {
     method:  'POST',
-    headers: { Authorization: `Bearer ${idToken}` },
-    body:    formData,
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization:  `Bearer ${idToken}`,
+    },
+    body: JSON.stringify(body),
   })
 
   if (!res.ok) {
@@ -139,22 +133,18 @@ export async function uploadTheme(cssText, filename, logoFile, idToken) {
 // ── Boot loader ───────────────────────────────────────────────────────────────
 
 /**
- * Load the tenant's published theme CSS and inject it into the document.
- * Called once at app start from main.jsx after the session is known.
- *
- * @param {string} cssFile - value of Tenant.brand_css_file from DynamoDB,
- *                           e.g. 'theme.tenant.1715640000000.css'
- * @param {string} idToken
+ * Fetch the tenant's published theme CSS from the backend and inject it.
+ * Called once at app boot after the session is hydrated.
  */
 export async function loadTenantTheme(cssFile, idToken) {
   if (!cssFile) return
   try {
-    const res = await fetch(`${API}/tenant/branding/css?file=${encodeURIComponent(cssFile)}`, {
-      headers: { Authorization: `Bearer ${idToken}` },
-    })
+    const res = await fetch(
+      `${API}/tenant/branding/css?file=${encodeURIComponent(cssFile)}`,
+      { headers: { Authorization: `Bearer ${idToken}` } }
+    )
     if (!res.ok) return
-    const cssText = await res.text()
-    injectTheme(cssText)
+    injectTheme(await res.text())
   } catch {
     // Non-fatal — fall back to base theme
   }
