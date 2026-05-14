@@ -22,18 +22,16 @@ function isValidHex(h) {
 function BrandingPanel({ tenant, idToken, onPublished }) {
   const toast = useToast()
 
-  // Derive initial values from tenant record
   const initColor = THEME_COLORS.find(c => c.primary === tenant?.brand_color) ?? THEME_COLORS[0]
 
   const [selectedColorId, setSelectedColorId] = useState(initColor.id)
-  const [customHex,       setCustomHex]       = useState(tenant?.brand_color ?? '#3d7a28')
-  const [logoFile,        setLogoFile]         = useState(null)
-  const [logoPreviewUrl,  setLogoPreviewUrl]   = useState(tenant?.brand_logo_url ?? '')
-  const [publishing,      setPublishing]       = useState(false)
-  const [dirty,           setDirty]            = useState(false)
+  const [customHex,       setCustomHex]        = useState(tenant?.brand_color ?? '#3d7a28')
+  const [logoFile,        setLogoFile]          = useState(null)
+  const [logoPreviewUrl,  setLogoPreviewUrl]    = useState(tenant?.brand_logo_url ?? '')
+  const [publishing,      setPublishing]        = useState(false)
+  const [dirty,           setDirty]             = useState(false)
   const fileRef = useRef(null)
 
-  // Resolve current primary colour from selection
   const resolveColors = () => {
     if (selectedColorId === 'custom') {
       const hex = isValidHex(customHex) ? customHex : '#3d7a28'
@@ -43,37 +41,27 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
     return { primary: preset.primary, primaryHover: preset.primaryHover }
   }
 
-  // Live preview: re-inject CSS whenever color selection changes
+  // Live preview — re-inject on every colour or logo change
   useEffect(() => {
     const { primary, primaryHover } = resolveColors()
-    const css = generateThemeCss({
+    injectTheme(generateThemeCss({
       primary, primaryHover,
       logoUrl:   logoPreviewUrl,
       tenantId:  tenant?.tenant_id ?? '',
       timestamp: Date.now(),
-    })
-    injectTheme(css)
-    return () => { /* keep preview until unmount or publish */ }
+    }))
   }, [selectedColorId, customHex, logoPreviewUrl])
 
-  // Remove preview when panel unmounts without publishing
   useEffect(() => () => { if (!publishing) removeTheme() }, [])
 
-  const handleColorChange = (id) => {
-    setSelectedColorId(id)
-    setDirty(true)
-  }
-
-  const handleCustomHex = (v) => {
-    setCustomHex(v)
-    setDirty(true)
-  }
+  const handleColorChange = (id) => { setSelectedColorId(id); setDirty(true) }
+  const handleCustomHex   = (v)  => { setCustomHex(v);        setDirty(true) }
 
   const handleLogoChange = (e) => {
     const file = e.target.files?.[0]
     if (!file) return
     if (!file.type.startsWith('image/')) { toast('Please select an image file', 'error'); return }
-    if (file.size > 2 * 1024 * 1024)    { toast('Logo must be under 2 MB', 'error'); return }
+    if (file.size > 2 * 1024 * 1024)    { toast('Logo must be under 2 MB',       'error'); return }
     setLogoFile(file)
     setLogoPreviewUrl(URL.createObjectURL(file))
     setDirty(true)
@@ -95,14 +83,12 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
     setPublishing(true)
     try {
       const result = await uploadTheme(cssText, filename, logoFile, idToken)
-      // Re-inject final CSS with the real logo URL from S3 (not blob:)
-      const finalCss = generateThemeCss({
+      injectTheme(generateThemeCss({
         primary, primaryHover,
         logoUrl:  result.logo_url ?? '',
         tenantId: tenant?.tenant_id ?? '',
         timestamp,
-      })
-      injectTheme(finalCss)
+      }))
       toast(`Theme published: ${filename}`)
       setDirty(false)
       setLogoFile(null)
@@ -123,18 +109,12 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
       {/* ── Editor column ── */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
 
-        {/* Colour picker */}
         <div className="card" style={{ padding: 20 }}>
           <h3 style={{ fontWeight: 600, fontSize: 14, marginBottom: 14 }}>Theme Colour</h3>
           <div className="fg">
             <label>Select colour</label>
-            <select
-              value={selectedColorId}
-              onChange={e => handleColorChange(e.target.value)}
-            >
-              {THEME_COLORS.map(c => (
-                <option key={c.id} value={c.id}>{c.label}</option>
-              ))}
+            <select value={selectedColorId} onChange={e => handleColorChange(e.target.value)}>
+              {THEME_COLORS.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
             </select>
           </div>
 
@@ -165,7 +145,6 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
             </div>
           )}
 
-          {/* Colour swatches */}
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
             {THEME_COLORS.filter(c => c.id !== 'custom').map(c => (
               <button
@@ -173,38 +152,22 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
                 title={c.label}
                 onClick={() => handleColorChange(c.id)}
                 style={{
-                  width: 28, height: 28,
-                  borderRadius: '50%',
-                  background: c.primary,
-                  border: selectedColorId === c.id
-                    ? '3px solid var(--text)'
-                    : '2px solid transparent',
-                  cursor: 'pointer',
-                  outline: 'none',
-                  transition: 'border .15s',
+                  width: 28, height: 28, borderRadius: '50%', background: c.primary,
+                  border: selectedColorId === c.id ? '3px solid var(--text)' : '2px solid transparent',
+                  cursor: 'pointer', outline: 'none', transition: 'border .15s',
                 }}
               />
             ))}
           </div>
         </div>
 
-        {/* Logo upload */}
         <div className="card" style={{ padding: 20 }}>
           <h3 style={{ fontWeight: 600, fontSize: 14, marginBottom: 14 }}>Shop Logo</h3>
-          <input
-            ref={fileRef}
-            type="file"
-            accept="image/*"
-            style={{ display: 'none' }}
-            onChange={handleLogoChange}
-          />
+          <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handleLogoChange} />
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 10 }}>
-            {logoPreviewUrl && !logoPreviewUrl.startsWith('blob:') === false || logoPreviewUrl ? (
-              <img
-                src={logoPreviewUrl}
-                alt="Logo preview"
-                style={{ height: 48, maxWidth: 120, objectFit: 'contain', border: '1px solid var(--border)', borderRadius: 4, padding: 4 }}
-              />
+            {logoPreviewUrl ? (
+              <img src={logoPreviewUrl} alt="Logo preview"
+                style={{ height: 48, maxWidth: 120, objectFit: 'contain', border: '1px solid var(--border)', borderRadius: 4, padding: 4 }} />
             ) : (
               <div style={{ width: 120, height: 48, border: '1px dashed var(--border)', borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, color: 'var(--muted)' }}>
                 No logo
@@ -214,10 +177,8 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
               {logoPreviewUrl ? 'Change logo' : 'Upload logo'}
             </button>
             {logoPreviewUrl && (
-              <button
-                className="btn btn-secondary btn-sm"
-                onClick={() => { setLogoFile(null); setLogoPreviewUrl(''); setDirty(true) }}
-              >
+              <button className="btn btn-secondary btn-sm"
+                onClick={() => { setLogoFile(null); setLogoPreviewUrl(''); setDirty(true) }}>
                 Remove
               </button>
             )}
@@ -227,7 +188,6 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
           </p>
         </div>
 
-        {/* Publish */}
         <button
           className="btn btn-primary"
           onClick={handlePublish}
@@ -248,16 +208,7 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
         <div className="card" style={{ padding: 20 }}>
           <h3 style={{ fontWeight: 600, fontSize: 14, marginBottom: 16 }}>Live Preview</h3>
 
-          {/* Topbar mock */}
-          <div style={{
-            background: primary,
-            borderRadius: 6,
-            padding: '10px 16px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            marginBottom: 12,
-          }}>
+          <div style={{ background: primary, borderRadius: 6, padding: '10px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {logoPreviewUrl ? (
                 <img src={logoPreviewUrl} alt="logo" style={{ height: 28, maxWidth: 80, objectFit: 'contain' }} />
@@ -271,21 +222,16 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
             <span style={{ fontSize: 11, color: 'rgba(255,255,255,.75)' }}>Topbar</span>
           </div>
 
-          {/* Sidebar mock */}
-          <div style={{ display: 'flex', gap: 0, border: '1px solid var(--border)', borderRadius: 6, overflow: 'hidden' }}>
+          <div style={{ display: 'flex', border: '1px solid var(--border)', borderRadius: 6, overflow: 'hidden' }}>
             <div style={{ width: 100, background: '#fff', borderRight: '1px solid var(--border)', padding: '8px 0' }}>
               {['Dashboard', 'Work Orders', 'Staff'].map((item, i) => (
-                <div
-                  key={item}
-                  style={{
-                    padding: '6px 12px',
-                    fontSize: 11,
-                    fontWeight: i === 0 ? 700 : 400,
-                    color: i === 0 ? primary : 'var(--text)',
-                    background: i === 0 ? `${primary}18` : 'transparent',
-                    borderLeft: i === 0 ? `3px solid ${primary}` : '3px solid transparent',
-                  }}
-                >
+                <div key={item} style={{
+                  padding: '6px 12px', fontSize: 11,
+                  fontWeight: i === 0 ? 700 : 400,
+                  color:      i === 0 ? primary : 'var(--text)',
+                  background: i === 0 ? `${primary}18` : 'transparent',
+                  borderLeft: i === 0 ? `3px solid ${primary}` : '3px solid transparent',
+                }}>
                   {item}
                 </div>
               ))}
@@ -300,17 +246,12 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
                   </div>
                 ))}
               </div>
-              <button style={{
-                marginTop: 10, background: primary, color: '#fff',
-                border: 'none', borderRadius: 4, padding: '5px 10px',
-                fontSize: 10, cursor: 'default',
-              }}>
+              <button style={{ marginTop: 10, background: primary, color: '#fff', border: 'none', borderRadius: 4, padding: '5px 10px', fontSize: 10, cursor: 'default' }}>
                 + New Workorder
               </button>
             </div>
           </div>
 
-          {/* Colour token display */}
           <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
             <div style={{ width: 22, height: 22, borderRadius: 4, background: primary, border: '1px solid var(--border)' }} />
             <span style={{ fontSize: 11, color: 'var(--muted)', fontFamily: 'monospace' }}>{primary}</span>
@@ -325,14 +266,13 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
 // ── Settings page ─────────────────────────────────────────────────────────────
 
 export default function Settings() {
-  const { get }    = useApi()
-  const toast      = useToast()
-  const { tenantId, userType, idToken } = useAuth()
+  const { get }   = useApi()
+  const toast     = useToast()
+  // isAdmin is true only when user_type==='STAFF' AND cog_group==='SHOP_ADMIN'
+  const { tenantId, idToken, isAdmin } = useAuth()
   const [tenant,  setTenant]  = useState(null)
   const [loading, setLoading] = useState(true)
   const [tab,     setTab]     = useState('shop')
-
-  const isAdmin = userType === 'SHOP_ADMIN'
 
   useEffect(() => {
     get('/tenant')
@@ -349,7 +289,6 @@ export default function Settings() {
     <div>
       <div className="ph"><h1>Settings</h1></div>
 
-      {/* Tab bar */}
       <div className="tabs">
         <button className={`tab${tab === 'shop' ? ' active' : ''}`} onClick={() => setTab('shop')}>
           Shop Info
@@ -361,7 +300,6 @@ export default function Settings() {
         )}
       </div>
 
-      {/* Shop Info tab */}
       {tab === 'shop' && (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
           <div className="card" style={{ padding: 20 }}>
@@ -378,16 +316,12 @@ export default function Settings() {
             <div className="fg"><label>Plan</label>
               <input value={tenant?.plan ?? ''} readOnly style={{ background: 'var(--bg)' }} />
             </div>
-            {tenant?.phone && (
-              <div className="fg"><label>Phone</label>
-                <input value={tenant.phone} readOnly style={{ background: 'var(--bg)' }} />
-              </div>
-            )}
-            {tenant?.address && (
-              <div className="fg"><label>Address</label>
-                <input value={tenant.address} readOnly style={{ background: 'var(--bg)' }} />
-              </div>
-            )}
+            {tenant?.phone && <div className="fg"><label>Phone</label>
+              <input value={tenant.phone} readOnly style={{ background: 'var(--bg)' }} />
+            </div>}
+            {tenant?.address && <div className="fg"><label>Address</label>
+              <input value={tenant.address} readOnly style={{ background: 'var(--bg)' }} />
+            </div>}
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -397,15 +331,10 @@ export default function Settings() {
                 Share this link with staff members to access the portal.
               </p>
               <div style={{ display: 'flex', gap: 8 }}>
-                <input
-                  value={inviteLink}
-                  readOnly
-                  style={{ flex: 1, padding: '7px 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius)', fontSize: 13, background: 'var(--bg)' }}
-                />
-                <button
-                  className="btn btn-secondary btn-sm"
-                  onClick={() => { navigator.clipboard.writeText(inviteLink); toast('Copied!') }}
-                >
+                <input value={inviteLink} readOnly
+                  style={{ flex: 1, padding: '7px 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius)', fontSize: 13, background: 'var(--bg)' }} />
+                <button className="btn btn-secondary btn-sm"
+                  onClick={() => { navigator.clipboard.writeText(inviteLink); toast('Copied!') }}>
                   Copy
                 </button>
               </div>
@@ -432,7 +361,6 @@ export default function Settings() {
         </div>
       )}
 
-      {/* Branding tab — SHOP_ADMIN only */}
       {tab === 'branding' && isAdmin && (
         <BrandingPanel
           tenant={tenant}
