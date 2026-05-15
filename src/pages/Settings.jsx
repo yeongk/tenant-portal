@@ -7,8 +7,10 @@ import {
   deriveHover,
   generateThemeCss,
   injectTheme,
-  removeTheme,
+  injectPreviewTheme,
+  removePreviewTheme,
   cacheThemeCss,
+  getCachedThemeCss,
   uploadTheme,
 } from '../utils/brandingTheme'
 
@@ -31,9 +33,7 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
   const [dirty,           setDirty]             = useState(false)
   const fileRef      = useRef(null)
   const publishedRef = useRef(false)
-  // Track whether the user made local changes so unmount knows whether to
-  // tear down the preview theme or leave the real theme alone.
-  const dirtyRef = useRef(false)
+  const dirtyRef     = useRef(false)
 
   const resolveColors = () => {
     if (selectedColorId === 'custom') {
@@ -44,10 +44,19 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
     return { primary: preset.primary, primaryHover: preset.primaryHover }
   }
 
-  // Live preview — re-inject on every colour or logo change
+  // ── Preview injection ────────────────────────────────────────────────────────
+  //
+  // Writes ONLY to <style id="tenant-preview"> — a separate tag that sits after
+  // <style id="tenant-theme"> in <head> and therefore overrides its :root vars
+  // via CSS specificity/order. The real published tag is never touched here.
+  //
+  // Only inject the preview tag when the user has made a local change (dirty).
+  // On first mount with no changes the published theme is already correct and
+  // the preview tag should not exist.
   useEffect(() => {
+    if (!dirtyRef.current) return   // no unpublished changes — leave real theme alone
     const { primary, primaryHover } = resolveColors()
-    injectTheme(generateThemeCss({
+    injectPreviewTheme(generateThemeCss({
       primary, primaryHover,
       logoUrl:   logoPreviewUrl,
       tenantId:  tenant?.tenant_id ?? '',
@@ -55,35 +64,41 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
     }))
   }, [selectedColorId, customHex, logoPreviewUrl])
 
-  // On unmount: only remove the injected theme when the user made local
-  // changes that were NOT published. In that case the preview colour differs
-  // from the real published theme, so we must remove it and let the next
-  // page load / navigation re-inject from the sessionStorage cache.
+  // ── Unmount cleanup ──────────────────────────────────────────────────────────
   //
-  // If the user never touched anything (dirty === false) the live-preview
-  // useEffect injected the same colour as the published theme, so leaving it
-  // in place is correct and avoids a flash of unstyled content.
+  // Always remove the preview tag — it must not persist after the panel closes.
   //
-  // If the user published (publishedRef.current === true) the injected theme
-  // IS the new published theme — leave it alone.
+  // If the user made changes but did NOT publish:
+  //   - Restore the last published CSS from sessionStorage cache into the real
+  //     <style id="tenant-theme"> tag so the portal snaps back to the correct
+  //     published theme.
+  //   - If there is no cached CSS (tenant has never published a theme) remove
+  //     the real tag too — there is nothing to restore.
+  //
+  // If the user published, or made no changes:
+  //   - The real <style id="tenant-theme"> tag is already correct — leave it.
   useEffect(() => {
     return () => {
+      removePreviewTheme()
       if (dirtyRef.current && !publishedRef.current) {
-        removeTheme()
+        const published = getCachedThemeCss()
+        if (published) {
+          injectTheme(published)   // restore last published theme
+        } else {
+          // No published theme has ever been set — leave the base theme
+          // (do not inject anything; the base CSS vars from theme.base.css apply)
+        }
       }
     }
   }, [])
 
-  const handleColorChange = (id) => {
-    setSelectedColorId(id)
+  const markDirty = () => {
     setDirty(true)
     dirtyRef.current = true
   }
-  const handleCustomHex = (v) => {
-    setCustomHex(v)
-    setDirty(true)
-    dirtyRef.current = true
-  }
+
+  const handleColorChange = (id) => { setSelectedColorId(id); markDirty() }
+  const handleCustomHex   = (v)  => { setCustomHex(v);        markDirty() }
 
   const handleLogoChange = (e) => {
     const file = e.target.files?.[0]
@@ -92,8 +107,7 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
     if (file.size > 2 * 1024 * 1024)    { toast('Logo must be under 2 MB',       'error'); return }
     setLogoFile(file)
     setLogoPreviewUrl(URL.createObjectURL(file))
-    setDirty(true)
-    dirtyRef.current = true
+    markDirty()
   }
 
   const handlePublish = async () => {
@@ -102,9 +116,7 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
 
     const timestamp = Date.now()
     const filename  = `theme.tenant.${timestamp}.css`
-    // Use blob: URL for preview in the upload call (backend ignores it);
-    // we'll regenerate with the real S3 URL after the response.
-    const cssText = generateThemeCss({
+    const cssText   = generateThemeCss({
       primary, primaryHover,
       logoUrl:  logoPreviewUrl.startsWith('blob:') ? '' : logoPreviewUrl,
       tenantId: tenant?.tenant_id ?? '',
@@ -115,7 +127,7 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
     try {
       const result = await uploadTheme(cssText, filename, logoFile, idToken)
 
-      // Build the final CSS with the confirmed S3 logo URL
+      // Build final CSS with the confirmed S3 logo URL
       const finalCss = generateThemeCss({
         primary, primaryHover,
         logoUrl:  result.logo_url ?? '',
@@ -123,17 +135,20 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
         timestamp,
       })
 
-      // 1. Inject into the live DOM immediately — portal reflects new theme now
+      // 1. Inject into <style id="tenant-theme"> — this IS the publish moment.
+      //    From here on the portal chrome reflects the new theme.
       injectTheme(finalCss)
 
-      // 2. Write to sessionStorage cache — every subsequent page load or
-      //    navigation in this session will inject from cache synchronously
-      //    (zero network delay, no CloudFront involvement)
+      // 2. Write to sessionStorage cache so session navigations and page
+      //    refreshes both get the new theme instantly.
       cacheThemeCss(finalCss)
 
-      // 3. Mark as published so unmount cleanup preserves the injected theme
+      // 3. Remove the preview tag — no longer needed; the real tag is correct.
+      removePreviewTheme()
+
+      // 4. Mark as published so unmount cleanup doesn't restore the old theme.
       publishedRef.current = true
-      dirtyRef.current = false
+      dirtyRef.current     = false
 
       toast(`Theme published: ${filename}`)
       setDirty(false)
@@ -228,7 +243,7 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
             </button>
             {logoPreviewUrl && (
               <button className="btn btn-secondary btn-sm"
-                onClick={() => { setLogoFile(null); setLogoPreviewUrl(''); setDirty(true); dirtyRef.current = true }}>
+                onClick={() => { setLogoFile(null); setLogoPreviewUrl(''); markDirty() }}>
                 Remove
               </button>
             )}
@@ -254,6 +269,9 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
       </div>
 
       {/* ── Live preview column ── */}
+      {/* NOTE: this panel renders with inline JS state (the `primary` var from  */}
+      {/* resolveColors()), NOT from CSS vars. It is intentionally self-contained */}
+      {/* so it shows the pending colour without affecting the portal chrome.      */}
       <div>
         <div className="card" style={{ padding: 20 }}>
           <h3 style={{ fontWeight: 600, fontSize: 14, marginBottom: 16 }}>Live Preview</h3>

@@ -19,14 +19,25 @@
  * the next navigation (or page refresh) also reflects the new theme
  * without any network call.
  *
- * The theme CSS never goes through CloudFront's S3 cache — it is always
- * fetched from the API (Lambda), so there is no CloudFront invalidation
- * concern even without sessionStorage caching.
+ * Two separate <style> tags are used:
+ *
+ *   #tenant-theme    — the PUBLISHED theme, injected on login / publish.
+ *                      Topbar, Sidebar, and all portal chrome read from this.
+ *                      Only written by injectTheme() / removeTheme().
+ *
+ *   #tenant-preview  — an UNPUBLISHED preview injected only while the user
+ *                      is editing in the Branding settings panel. Removed
+ *                      on unmount whether or not changes were published.
+ *                      Only written by injectPreviewTheme() / removePreviewTheme().
+ *
+ * This separation ensures that picker changes in the Branding panel never
+ * affect the live portal chrome until the user clicks Publish.
  */
 
-const API          = `${import.meta.env.VITE_API_URL ?? 'http://localhost:3000'}/api`
-const STYLE_TAG_ID = 'tenant-theme'
-const CACHE_KEY    = 'tp_theme_css'    // sessionStorage key for theme CSS text
+const API             = `${import.meta.env.VITE_API_URL ?? 'http://localhost:3000'}/api`
+const STYLE_TAG_ID    = 'tenant-theme'    // published — real portal chrome
+const PREVIEW_TAG_ID  = 'tenant-preview'  // unpublished — branding panel only
+const CACHE_KEY       = 'tp_theme_css'    // sessionStorage key for theme CSS text
 
 // ── Colour palette ────────────────────────────────────────────────────────────
 
@@ -73,9 +84,13 @@ export function generateThemeCss({ primary, primaryHover, logoUrl, tenantId, tim
   ].join('\n') + '\n'
 }
 
-// ── DOM injection ─────────────────────────────────────────────────────────────
+// ── DOM injection — PUBLISHED theme ──────────────────────────────────────────
+//
+// These functions operate on <style id="tenant-theme"> which is the
+// authoritative published theme read by Topbar, Sidebar, and all portal chrome.
+// They must ONLY be called on successful Publish or on session restore.
 
-/** Inject (or replace) the tenant theme <style> tag in <head>. */
+/** Inject (or replace) the published tenant theme <style> tag in <head>. */
 export function injectTheme(cssText) {
   let tag = document.getElementById(STYLE_TAG_ID)
   if (!tag) {
@@ -86,9 +101,34 @@ export function injectTheme(cssText) {
   tag.textContent = cssText
 }
 
-/** Remove the tenant theme <style> tag (reverts to base theme). */
+/** Remove the published tenant theme <style> tag (reverts to base theme). */
 export function removeTheme() {
   const tag = document.getElementById(STYLE_TAG_ID)
+  if (tag) tag.remove()
+}
+
+// ── DOM injection — PREVIEW theme ─────────────────────────────────────────────
+//
+// These functions operate on <style id="tenant-preview"> which is ONLY used
+// while the user is in the Branding settings panel editing unpublished changes.
+// Because #tenant-preview comes after #tenant-theme in <head>, its :root vars
+// will override the published vars — but ONLY while the preview tag exists.
+// On unmount (whether published or not) removePreviewTheme() is always called.
+
+/** Inject (or replace) the unpublished preview <style> tag. */
+export function injectPreviewTheme(cssText) {
+  let tag = document.getElementById(PREVIEW_TAG_ID)
+  if (!tag) {
+    tag = document.createElement('style')
+    tag.id = PREVIEW_TAG_ID
+    document.head.appendChild(tag)
+  }
+  tag.textContent = cssText
+}
+
+/** Remove the unpublished preview <style> tag. */
+export function removePreviewTheme() {
+  const tag = document.getElementById(PREVIEW_TAG_ID)
   if (tag) tag.remove()
 }
 
