@@ -11,13 +11,11 @@ import {
   uploadTheme,
 } from '../utils/brandingTheme'
 
-// ── helpers ───────────────────────────────────────────────────────────────────
-
 function isValidHex(h) {
   return /^#[0-9a-fA-F]{6}$/.test(h)
 }
 
-// ── BrandingPanel (SHOP_ADMIN only) ───────────────────────────────────────────
+// ── BrandingPanel ─────────────────────────────────────────────────────────────
 
 function BrandingPanel({ tenant, idToken, onPublished }) {
   const toast = useToast()
@@ -30,7 +28,13 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
   const [logoPreviewUrl,  setLogoPreviewUrl]    = useState(tenant?.brand_logo_url ?? '')
   const [publishing,      setPublishing]        = useState(false)
   const [dirty,           setDirty]             = useState(false)
-  const fileRef = useRef(null)
+  const fileRef      = useRef(null)
+  // Track whether the admin published during this panel session.
+  // If they navigate away WITHOUT publishing, remove the preview theme so
+  // the portal reverts to the last published theme (re-injected by App.jsx
+  // on the next navigation/reload).
+  // If they DID publish, keep the injected theme — it IS the current theme.
+  const publishedRef = useRef(false)
 
   const resolveColors = () => {
     if (selectedColorId === 'custom') {
@@ -41,7 +45,7 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
     return { primary: preset.primary, primaryHover: preset.primaryHover }
   }
 
-  // Live preview — re-inject on every colour or logo change
+  // Live preview — re-inject whenever colour or logo changes
   useEffect(() => {
     const { primary, primaryHover } = resolveColors()
     injectTheme(generateThemeCss({
@@ -52,7 +56,16 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
     }))
   }, [selectedColorId, customHex, logoPreviewUrl])
 
-  useEffect(() => () => { if (!publishing) removeTheme() }, [])
+  // On unmount: remove the preview only if the admin never published.
+  // If they published, the injected theme IS the correct current theme —
+  // removing it would revert the portal to the default until next reload.
+  useEffect(() => {
+    return () => {
+      if (!publishedRef.current) {
+        removeTheme()
+      }
+    }
+  }, [])
 
   const handleColorChange = (id) => { setSelectedColorId(id); setDirty(true) }
   const handleCustomHex   = (v)  => { setCustomHex(v);        setDirty(true) }
@@ -83,17 +96,28 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
     setPublishing(true)
     try {
       const result = await uploadTheme(cssText, filename, logoFile, idToken)
-      injectTheme(generateThemeCss({
+
+      // Inject the final CSS (with real S3 logo URL, not blob:)
+      const finalCss = generateThemeCss({
         primary, primaryHover,
         logoUrl:  result.logo_url ?? '',
         tenantId: tenant?.tenant_id ?? '',
         timestamp,
-      }))
+      })
+      injectTheme(finalCss)
+
+      // Mark as published so unmount cleanup does NOT remove the theme
+      publishedRef.current = true
+
       toast(`Theme published: ${filename}`)
       setDirty(false)
       setLogoFile(null)
       if (result.logo_url) setLogoPreviewUrl(result.logo_url)
-      onPublished({ brand_color: primary, brand_css_file: result.css_file, brand_logo_url: result.logo_url })
+      onPublished({
+        brand_color:    primary,
+        brand_css_file: result.css_file,
+        brand_logo_url: result.logo_url,
+      })
     } catch (err) {
       toast(err.message, 'error')
     } finally {
@@ -268,7 +292,6 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
 export default function Settings() {
   const { get }   = useApi()
   const toast     = useToast()
-  // isAdmin is true only when user_type==='STAFF' AND cog_group==='SHOP_ADMIN'
   const { tenantId, idToken, isAdmin } = useAuth()
   const [tenant,  setTenant]  = useState(null)
   const [loading, setLoading] = useState(true)
