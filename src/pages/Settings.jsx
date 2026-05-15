@@ -8,6 +8,7 @@ import {
   generateThemeCss,
   injectTheme,
   removeTheme,
+  cacheThemeCss,
   uploadTheme,
 } from '../utils/brandingTheme'
 
@@ -29,11 +30,6 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
   const [publishing,      setPublishing]        = useState(false)
   const [dirty,           setDirty]             = useState(false)
   const fileRef      = useRef(null)
-  // Track whether the admin published during this panel session.
-  // If they navigate away WITHOUT publishing, remove the preview theme so
-  // the portal reverts to the last published theme (re-injected by App.jsx
-  // on the next navigation/reload).
-  // If they DID publish, keep the injected theme — it IS the current theme.
   const publishedRef = useRef(false)
 
   const resolveColors = () => {
@@ -45,7 +41,7 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
     return { primary: preset.primary, primaryHover: preset.primaryHover }
   }
 
-  // Live preview — re-inject whenever colour or logo changes
+  // Live preview — re-inject on every colour or logo change
   useEffect(() => {
     const { primary, primaryHover } = resolveColors()
     injectTheme(generateThemeCss({
@@ -56,14 +52,12 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
     }))
   }, [selectedColorId, customHex, logoPreviewUrl])
 
-  // On unmount: remove the preview only if the admin never published.
-  // If they published, the injected theme IS the correct current theme —
-  // removing it would revert the portal to the default until next reload.
+  // On unmount: keep the injected theme if the admin published; remove it
+  // if they navigated away without publishing (App.jsx will re-inject from
+  // the sessionStorage cache on the next load).
   useEffect(() => {
     return () => {
-      if (!publishedRef.current) {
-        removeTheme()
-      }
+      if (!publishedRef.current) removeTheme()
     }
   }, [])
 
@@ -86,7 +80,9 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
 
     const timestamp = Date.now()
     const filename  = `theme.tenant.${timestamp}.css`
-    const cssText   = generateThemeCss({
+    // Use blob: URL for preview in the upload call (backend ignores it);
+    // we'll regenerate with the real S3 URL after the response.
+    const cssText = generateThemeCss({
       primary, primaryHover,
       logoUrl:  logoPreviewUrl.startsWith('blob:') ? '' : logoPreviewUrl,
       tenantId: tenant?.tenant_id ?? '',
@@ -97,16 +93,23 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
     try {
       const result = await uploadTheme(cssText, filename, logoFile, idToken)
 
-      // Inject the final CSS (with real S3 logo URL, not blob:)
+      // Build the final CSS with the confirmed S3 logo URL
       const finalCss = generateThemeCss({
         primary, primaryHover,
         logoUrl:  result.logo_url ?? '',
         tenantId: tenant?.tenant_id ?? '',
         timestamp,
       })
+
+      // 1. Inject into the live DOM immediately — portal reflects new theme now
       injectTheme(finalCss)
 
-      // Mark as published so unmount cleanup does NOT remove the theme
+      // 2. Write to sessionStorage cache — every subsequent page load or
+      //    navigation in this session will inject from cache synchronously
+      //    (zero network delay, no CloudFront involvement)
+      cacheThemeCss(finalCss)
+
+      // 3. Mark as published so unmount cleanup preserves the injected theme
       publishedRef.current = true
 
       toast(`Theme published: ${filename}`)
