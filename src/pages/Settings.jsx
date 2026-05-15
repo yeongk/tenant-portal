@@ -31,6 +31,9 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
   const [dirty,           setDirty]             = useState(false)
   const fileRef      = useRef(null)
   const publishedRef = useRef(false)
+  // Track whether the user made local changes so unmount knows whether to
+  // tear down the preview theme or leave the real theme alone.
+  const dirtyRef = useRef(false)
 
   const resolveColors = () => {
     if (selectedColorId === 'custom') {
@@ -52,17 +55,35 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
     }))
   }, [selectedColorId, customHex, logoPreviewUrl])
 
-  // On unmount: keep the injected theme if the admin published; remove it
-  // if they navigated away without publishing (App.jsx will re-inject from
-  // the sessionStorage cache on the next load).
+  // On unmount: only remove the injected theme when the user made local
+  // changes that were NOT published. In that case the preview colour differs
+  // from the real published theme, so we must remove it and let the next
+  // page load / navigation re-inject from the sessionStorage cache.
+  //
+  // If the user never touched anything (dirty === false) the live-preview
+  // useEffect injected the same colour as the published theme, so leaving it
+  // in place is correct and avoids a flash of unstyled content.
+  //
+  // If the user published (publishedRef.current === true) the injected theme
+  // IS the new published theme — leave it alone.
   useEffect(() => {
     return () => {
-      if (!publishedRef.current) removeTheme()
+      if (dirtyRef.current && !publishedRef.current) {
+        removeTheme()
+      }
     }
   }, [])
 
-  const handleColorChange = (id) => { setSelectedColorId(id); setDirty(true) }
-  const handleCustomHex   = (v)  => { setCustomHex(v);        setDirty(true) }
+  const handleColorChange = (id) => {
+    setSelectedColorId(id)
+    setDirty(true)
+    dirtyRef.current = true
+  }
+  const handleCustomHex = (v) => {
+    setCustomHex(v)
+    setDirty(true)
+    dirtyRef.current = true
+  }
 
   const handleLogoChange = (e) => {
     const file = e.target.files?.[0]
@@ -72,6 +93,7 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
     setLogoFile(file)
     setLogoPreviewUrl(URL.createObjectURL(file))
     setDirty(true)
+    dirtyRef.current = true
   }
 
   const handlePublish = async () => {
@@ -111,6 +133,7 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
 
       // 3. Mark as published so unmount cleanup preserves the injected theme
       publishedRef.current = true
+      dirtyRef.current = false
 
       toast(`Theme published: ${filename}`)
       setDirty(false)
@@ -205,7 +228,7 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
             </button>
             {logoPreviewUrl && (
               <button className="btn btn-secondary btn-sm"
-                onClick={() => { setLogoFile(null); setLogoPreviewUrl(''); setDirty(true) }}>
+                onClick={() => { setLogoFile(null); setLogoPreviewUrl(''); setDirty(true); dirtyRef.current = true }}>
                 Remove
               </button>
             )}
