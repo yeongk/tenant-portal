@@ -1,18 +1,32 @@
 /**
  * brandingTheme.js
  *
- * Utilities for generating, injecting, uploading, and loading tenant
- * branding theme CSS files.
+ * Utilities for generating, injecting, caching, uploading, and loading
+ * tenant branding theme CSS.
  *
- * Upload protocol: JSON (not multipart/form-data).
- * API Gateway v2 + Lambda (Mangum) can silently corrupt or fail to parse
- * multipart bodies without extra binary media type configuration.  Sending
- * plain JSON avoids the issue entirely — the logo is base64-encoded in the
- * browser and decoded server-side before writing to S3.
+ * Theme application strategy — zero CloudFront delay
+ * ───────────────────────────────────────────────────
+ * The theme CSS text is stored in sessionStorage under 'tp_theme_css'.
+ * On every page load App.jsx reads it synchronously and injects it before
+ * React even mounts — so there is never a flash of the default theme for
+ * returning visitors within the same session.
+ *
+ * On first login (empty cache) App.jsx fires a background fetch of
+ * GET /api/tenant → GET /api/tenant/branding/css, then caches the result.
+ * Subsequent navigations (SPA route changes) are instant — no fetch needed.
+ *
+ * On publish, Settings.jsx caches the freshly-generated CSS immediately so
+ * the next navigation (or page refresh) also reflects the new theme
+ * without any network call.
+ *
+ * The theme CSS never goes through CloudFront's S3 cache — it is always
+ * fetched from the API (Lambda), so there is no CloudFront invalidation
+ * concern even without sessionStorage caching.
  */
 
-const API = `${import.meta.env.VITE_API_URL ?? 'http://localhost:3000'}/api`
+const API          = `${import.meta.env.VITE_API_URL ?? 'http://localhost:3000'}/api`
 const STYLE_TAG_ID = 'tenant-theme'
+const CACHE_KEY    = 'tp_theme_css'    // sessionStorage key for theme CSS text
 
 // ── Colour palette ────────────────────────────────────────────────────────────
 
@@ -34,7 +48,7 @@ export function deriveHover(hex) {
   const c = hex.replace('#', '')
   if (c.length !== 6) return hex
   const darken = (ch) => Math.max(0, parseInt(ch, 16) - 30).toString(16).padStart(2, '0')
-  return `#${darken(c.slice(0,2))}${darken(c.slice(2,4))}${darken(c.slice(4,6))}`
+  return `#${darken(c.slice(0, 2))}${darken(c.slice(2, 4))}${darken(c.slice(4, 6))}`
 }
 
 // ── CSS generation ────────────────────────────────────────────────────────────
@@ -59,8 +73,9 @@ export function generateThemeCss({ primary, primaryHover, logoUrl, tenantId, tim
   ].join('\n') + '\n'
 }
 
-// ── Live preview ──────────────────────────────────────────────────────────────
+// ── DOM injection ─────────────────────────────────────────────────────────────
 
+/** Inject (or replace) the tenant theme <style> tag in <head>. */
 export function injectTheme(cssText) {
   let tag = document.getElementById(STYLE_TAG_ID)
   if (!tag) {
@@ -71,23 +86,46 @@ export function injectTheme(cssText) {
   tag.textContent = cssText
 }
 
+/** Remove the tenant theme <style> tag (reverts to base theme). */
 export function removeTheme() {
   const tag = document.getElementById(STYLE_TAG_ID)
   if (tag) tag.remove()
 }
 
+// ── sessionStorage cache ──────────────────────────────────────────────────────
+//
+// Stores the raw CSS text so it can be injected synchronously on the next
+// page load — before any React component renders and before any fetch.
+
+/** Write theme CSS text into sessionStorage. Called after publish and after fetch. */
+export function cacheThemeCss(cssText) {
+  try {
+    sessionStorage.setItem(CACHE_KEY, cssText)
+  } catch { /* non-fatal: private browsing quota */ }
+}
+
+/** Read cached theme CSS text. Returns null if nothing is cached. */
+export function getCachedThemeCss() {
+  try {
+    return sessionStorage.getItem(CACHE_KEY) || null
+  } catch {
+    return null
+  }
+}
+
+/** Clear the cached theme (called on logout). */
+export function clearThemeCache() {
+  try {
+    sessionStorage.removeItem(CACHE_KEY)
+  } catch { /* non-fatal */ }
+}
+
 // ── Upload ────────────────────────────────────────────────────────────────────
 
-/**
- * Read a File object as a base64 string.
- */
 function fileToBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
-    reader.onload  = () => {
-      // result is "data:<mime>;base64,<data>" — strip the prefix
-      resolve(reader.result.split(',')[1])
-    }
+    reader.onload  = () => resolve(reader.result.split(',')[1])
     reader.onerror = () => reject(new Error('Failed to read logo file'))
     reader.readAsDataURL(file)
   })
@@ -95,19 +133,10 @@ function fileToBase64(file) {
 
 /**
  * Upload theme CSS and optional logo to the backend as JSON.
- *
- * The logo File is base64-encoded in the browser before sending.
- * The backend decodes it and writes it to S3.
- *
- * @param {string}    cssText  - content of the theme CSS file
- * @param {string}    filename - e.g. 'theme.tenant.1715640000000.css'
- * @param {File|null} logoFile - browser File object, or null if unchanged
- * @param {string}    idToken  - Cognito ID token for Authorization header
- * @returns {Promise<{ css_file: string, logo_url: string }>}
+ * Also caches the CSS text immediately so the next page load is instant.
  */
 export async function uploadTheme(cssText, filename, logoFile, idToken) {
   const body = { css_text: cssText, filename }
-
   if (logoFile) {
     body.logo_b64       = await fileToBase64(logoFile)
     body.logo_mime_type = logoFile.type || 'image/png'
@@ -116,25 +145,40 @@ export async function uploadTheme(cssText, filename, logoFile, idToken) {
 
   const res = await fetch(`${API}/tenant/branding`, {
     method:  'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization:  `Bearer ${idToken}`,
-    },
-    body: JSON.stringify(body),
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+    body:    JSON.stringify(body),
   })
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
     throw new Error(err.detail ?? `Upload failed (HTTP ${res.status})`)
   }
-  return res.json()   // { css_file, logo_url }
+
+  const result = await res.json()   // { css_file, logo_url }
+
+  // Cache the final CSS (with real logo URL, not blob:) immediately.
+  // This means the next page load / navigation injects the new theme
+  // synchronously from sessionStorage — no fetch required.
+  const finalCss = generateThemeCss({
+    primary:      _extractPrimary(cssText),
+    primaryHover: _extractPrimaryHover(cssText),
+    logoUrl:      result.logo_url ?? '',
+    tenantId:     _extractTenantId(cssText),
+    timestamp:    Date.now(),
+  })
+  cacheThemeCss(finalCss)
+
+  return result
 }
 
 // ── Boot loader ───────────────────────────────────────────────────────────────
 
 /**
- * Fetch the tenant's published theme CSS from the backend and inject it.
- * Called once at app boot after the session is hydrated.
+ * Fetch the tenant's published theme CSS from the API and inject + cache it.
+ *
+ * Called by App.jsx only when the sessionStorage cache is empty (i.e. first
+ * login of the session). Subsequent navigations use getCachedThemeCss()
+ * which is synchronous and needs no network call.
  */
 export async function loadTenantTheme(cssFile, idToken) {
   if (!cssFile) return
@@ -144,8 +188,30 @@ export async function loadTenantTheme(cssFile, idToken) {
       { headers: { Authorization: `Bearer ${idToken}` } }
     )
     if (!res.ok) return
-    injectTheme(await res.text())
-  } catch {
-    // Non-fatal — fall back to base theme
+    const cssText = await res.text()
+    cacheThemeCss(cssText)   // cache for instant injection on next load
+    injectTheme(cssText)
+  } catch { /* non-fatal */ }
+}
+
+// ── Private CSS-text parsers (used by uploadTheme) ────────────────────────────
+
+function _extractValue(cssText, prop) {
+  for (const line of cssText.split('\n')) {
+    const s = line.trim()
+    if (s.startsWith(prop) && !s.includes('var(')) {
+      return s.split(':', 1).slice(1).join(':').replace(s.split(':')[0] + ':', '').trim().replace(/;$/, '').trim()
+    }
   }
+  return ''
+}
+
+function _extractPrimary(cssText)      { return _extractValue(cssText, '--brand-primary:') }
+function _extractPrimaryHover(cssText) { return _extractValue(cssText, '--brand-primary-h:') }
+function _extractTenantId(cssText) {
+  for (const line of cssText.split('\n')) {
+    const m = line.match(/\*\s*Tenant\s*:\s*(.+)/)
+    if (m) return m[1].trim()
+  }
+  return ''
 }
