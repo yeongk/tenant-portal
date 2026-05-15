@@ -10,6 +10,7 @@ import Customers from './pages/Customers'
 import WorkOrders from './pages/WorkOrders'
 import WorkOrderDetail from './pages/WorkOrderDetail'
 import Settings from './pages/Settings'
+import { loadTenantTheme } from './utils/brandingTheme'
 
 // ── JWT decode helper ─────────────────────────────────────────────────────────
 
@@ -21,16 +22,6 @@ function decodeJwt(token) {
   }
 }
 
-/**
- * Resolve the highest-privilege Cognito group for a STAFF user.
- *
- * Priority: SHOP_ADMIN > SUPERVISOR > MECHANIC
- * Returns '' for CLIENT users or tokens with no recognised group.
- *
- * The cognito:groups claim is an array of all groups the user belongs to.
- * We pick the most-privileged one so a user who is in both SHOP_ADMIN and
- * MECHANIC (unusual but possible) is treated as SHOP_ADMIN.
- */
 function resolveGroup(claims) {
   const groups = claims['cognito:groups'] ?? []
   if (groups.includes('SHOP_ADMIN'))  return 'SHOP_ADMIN'
@@ -40,35 +31,20 @@ function resolveGroup(claims) {
 }
 
 // ── Hash-token bootstrap ──────────────────────────────────────────────────────
-//
-// When dms-porsche redirects here after a successful login it appends a hash:
-//   /#token=<id_token>&tenant_id=<id>&shop_name=<name>
-//
-// The session must be written to sessionStorage BEFORE the router renders so
-// that ProtectedLayout reads isAuthenticated:true on its very first render.
-// Writing through React state (login()) is async — the state update batches
-// and the layout renders with the old null session first, causing a redirect
-// to /login before the update lands.
-//
-// Solution: parse the hash and write sessionStorage synchronously here,
-// at module evaluation time (outside any component), before React mounts.
-// AuthContext reads sessionStorage in its useState initializer, so it will
-// have the session from the very first render.
+// Runs synchronously before React mounts so AuthContext reads the session
+// on its very first render (from sessionStorage initializer).
 
 ;(function bootstrapFromHash() {
   const hash = window.location.hash.slice(1)
   if (!hash) return
-
   const params  = new URLSearchParams(hash)
   const idToken = params.get('token')
   if (!idToken) return
-
   const tenantId = params.get('tenant_id') ?? ''
   const shopName = params.get('shop_name') ?? ''
   const claims   = decodeJwt(idToken)
   const userType = claims['custom:userType'] ?? ''
   const cogGroup = resolveGroup(claims)
-
   try {
     sessionStorage.setItem('tp_sess', JSON.stringify({
       id_token:  idToken,
@@ -77,13 +53,35 @@ function resolveGroup(claims) {
       user_type: userType,
       cog_group: cogGroup,
     }))
-  } catch {
-    return
-  }
-
-  // Strip the hash so the token doesn't linger in the URL bar and so that
-  // a page refresh doesn't try to re-consume an already-expired token
+  } catch { return }
   window.history.replaceState(null, '', window.location.pathname + window.location.search)
+})()
+
+// ── Tenant theme boot-loader ──────────────────────────────────────────────────
+// Fetches the tenant's published brand_css_file from /api/tenant and injects
+// it so the correct theme is applied on every page load — not just immediately
+// after publishing.
+//
+// Must run after bootstrapFromHash (session is in sessionStorage by now).
+// Fire-and-forget — a brief flash of the default theme on first load is
+// acceptable; the fetch completes in ~200 ms on a warm Lambda.
+
+;(function applyTenantThemeOnBoot() {
+  try {
+    const raw = sessionStorage.getItem('tp_sess')
+    if (!raw) return
+    const sess = JSON.parse(raw)
+    if (!sess?.id_token) return
+    const API = `${import.meta.env.VITE_API_URL ?? 'http://localhost:3000'}/api`
+    fetch(`${API}/tenant`, { headers: { Authorization: `Bearer ${sess.id_token}` } })
+      .then(r => r.ok ? r.json() : null)
+      .then(tenant => {
+        if (tenant?.brand_css_file) {
+          loadTenantTheme(tenant.brand_css_file, sess.id_token)
+        }
+      })
+      .catch(() => { /* non-fatal */ })
+  } catch { /* non-fatal */ }
 })()
 
 // ── App ───────────────────────────────────────────────────────────────────────
