@@ -2,6 +2,7 @@ import React from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider } from './context/AuthContext'
 import { ToastProvider } from './context/ToastContext'
+import { BrandingProvider } from './context/BrandingContext'
 import ProtectedLayout from './layouts/ProtectedLayout'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
@@ -12,7 +13,7 @@ import WorkOrderDetail from './pages/WorkOrderDetail'
 import Settings from './pages/Settings'
 import { injectTheme, getCachedThemeCss, loadTenantTheme } from './utils/brandingTheme'
 
-// ── JWT decode helper ─────────────────────────────────────────────────────────
+// ── JWT decode helper ────────────────────────────────────────────────────────────
 
 function decodeJwt(token) {
   try {
@@ -28,7 +29,7 @@ function resolveGroup(claims) {
   return ''
 }
 
-// ── Hash-token bootstrap ──────────────────────────────────────────────────────
+// ── Hash-token bootstrap ───────────────────────────────────────────────────────
 // Runs synchronously before React mounts so AuthContext reads the correct
 // session from sessionStorage on its very first render.
 
@@ -51,7 +52,7 @@ function resolveGroup(claims) {
   window.history.replaceState(null, '', window.location.pathname + window.location.search)
 })()
 
-// ── Tenant theme — synchronous inject + background refresh ────────────────────
+// ── Tenant theme — synchronous inject + background refresh ──────────────────
 //
 // TWO-TIER strategy (no CloudFront involvement, no invalidation delay):
 //
@@ -69,6 +70,10 @@ function resolveGroup(claims) {
 // On publish: Settings.jsx calls cacheThemeCss(finalCss) immediately after
 //   the upload succeeds, so the next load (or React route change) reflects
 //   the new theme without any fetch.
+//
+// NOTE: this IIFE only sets the CSS vars on the <style> tag. The Topbar
+// reads its colours from BrandingContext (React state), which is seeded
+// from the same sessionStorage cache in BrandingProvider. Both stay in sync.
 
 ;(function applyTenantTheme() {
   try {
@@ -98,27 +103,29 @@ function resolveGroup(claims) {
   } catch { /* non-fatal */ }
 })()
 
-// ── App ───────────────────────────────────────────────────────────────────────
+// ── App ───────────────────────────────────────────────────────────────────
 
 export default function App() {
   return (
     <AuthProvider>
       <ToastProvider>
-        <BrowserRouter>
-          <Routes>
-            <Route path="/login" element={<Login />} />
-            <Route element={<ProtectedLayout />}>
-              <Route path="/"                element={<Navigate to="/dashboard" replace />} />
-              <Route path="/dashboard"       element={<Dashboard />} />
-              <Route path="/staff"           element={<Staff />} />
-              <Route path="/customers"       element={<Customers />} />
-              <Route path="/workorders"      element={<WorkOrders />} />
-              <Route path="/workorders/:id"  element={<WorkOrderDetail />} />
-              <Route path="/settings"        element={<Settings />} />
-            </Route>
-            <Route path="*" element={<Navigate to="/dashboard" replace />} />
-          </Routes>
-        </BrowserRouter>
+        <BrandingProvider>
+          <BrowserRouter>
+            <Routes>
+              <Route path="/login" element={<Login />} />
+              <Route element={<ProtectedLayout />}>
+                <Route path="/"                element={<Navigate to="/dashboard" replace />} />
+                <Route path="/dashboard"       element={<Dashboard />} />
+                <Route path="/staff"           element={<Staff />} />
+                <Route path="/customers"       element={<Customers />} />
+                <Route path="/workorders"      element={<WorkOrders />} />
+                <Route path="/workorders/:id"  element={<WorkOrderDetail />} />
+                <Route path="/settings"        element={<Settings />} />
+              </Route>
+              <Route path="*" element={<Navigate to="/dashboard" replace />} />
+            </Routes>
+          </BrowserRouter>
+        </BrandingProvider>
       </ToastProvider>
     </AuthProvider>
   )

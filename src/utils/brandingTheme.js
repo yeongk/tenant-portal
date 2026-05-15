@@ -19,25 +19,18 @@
  * the next navigation (or page refresh) also reflects the new theme
  * without any network call.
  *
- * Two separate <style> tags are used:
+ * The <style id="tenant-theme"> tag sets CSS vars consumed by Sidebar and
+ * any other elements that use var(--brand-primary) directly.
  *
- *   #tenant-theme    — the PUBLISHED theme, injected on login / publish.
- *                      Topbar, Sidebar, and all portal chrome read from this.
- *                      Only written by injectTheme() / removeTheme().
- *
- *   #tenant-preview  — an UNPUBLISHED preview injected only while the user
- *                      is editing in the Branding settings panel. Removed
- *                      on unmount whether or not changes were published.
- *                      Only written by injectPreviewTheme() / removePreviewTheme().
- *
- * This separation ensures that picker changes in the Branding panel never
- * affect the live portal chrome until the user clicks Publish.
+ * The Topbar reads its colours from BrandingContext (React state), which is
+ * initialised from the same sessionStorage cache and updated only on Publish.
+ * This means picker changes in BrandingPanel have zero effect on the live
+ * portal chrome — they update only the self-contained preview widget.
  */
 
-const API             = `${import.meta.env.VITE_API_URL ?? 'http://localhost:3000'}/api`
-const STYLE_TAG_ID    = 'tenant-theme'    // published — real portal chrome
-const PREVIEW_TAG_ID  = 'tenant-preview'  // unpublished — branding panel only
-const CACHE_KEY       = 'tp_theme_css'    // sessionStorage key for theme CSS text
+const API          = `${import.meta.env.VITE_API_URL ?? 'http://localhost:3000'}/api`
+const STYLE_TAG_ID = 'tenant-theme'
+const CACHE_KEY    = 'tp_theme_css'
 
 // ── Colour palette ────────────────────────────────────────────────────────────
 
@@ -84,13 +77,13 @@ export function generateThemeCss({ primary, primaryHover, logoUrl, tenantId, tim
   ].join('\n') + '\n'
 }
 
-// ── DOM injection — PUBLISHED theme ──────────────────────────────────────────
+// ── DOM injection ──────────────────────────────────────────────────────────────
 //
-// These functions operate on <style id="tenant-theme"> which is the
-// authoritative published theme read by Topbar, Sidebar, and all portal chrome.
-// They must ONLY be called on successful Publish or on session restore.
+// Operates on <style id="tenant-theme">.
+// Called only on: session restore (App.jsx IIFE) and successful Publish.
+// Never called on picker change.
 
-/** Inject (or replace) the published tenant theme <style> tag in <head>. */
+/** Inject (or replace) the tenant theme <style> tag in <head>. */
 export function injectTheme(cssText) {
   let tag = document.getElementById(STYLE_TAG_ID)
   if (!tag) {
@@ -101,66 +94,30 @@ export function injectTheme(cssText) {
   tag.textContent = cssText
 }
 
-/** Remove the published tenant theme <style> tag (reverts to base theme). */
+/** Remove the tenant theme <style> tag (reverts to base theme). */
 export function removeTheme() {
   const tag = document.getElementById(STYLE_TAG_ID)
   if (tag) tag.remove()
 }
 
-// ── DOM injection — PREVIEW theme ─────────────────────────────────────────────
-//
-// These functions operate on <style id="tenant-preview"> which is ONLY used
-// while the user is in the Branding settings panel editing unpublished changes.
-// Because #tenant-preview comes after #tenant-theme in <head>, its :root vars
-// will override the published vars — but ONLY while the preview tag exists.
-// On unmount (whether published or not) removePreviewTheme() is always called.
-
-/** Inject (or replace) the unpublished preview <style> tag. */
-export function injectPreviewTheme(cssText) {
-  let tag = document.getElementById(PREVIEW_TAG_ID)
-  if (!tag) {
-    tag = document.createElement('style')
-    tag.id = PREVIEW_TAG_ID
-    document.head.appendChild(tag)
-  }
-  tag.textContent = cssText
-}
-
-/** Remove the unpublished preview <style> tag. */
-export function removePreviewTheme() {
-  const tag = document.getElementById(PREVIEW_TAG_ID)
-  if (tag) tag.remove()
-}
-
 // ── sessionStorage cache ──────────────────────────────────────────────────────
-//
-// Stores the raw CSS text so it can be injected synchronously on the next
-// page load — before any React component renders and before any fetch.
 
 /** Write theme CSS text into sessionStorage. Called after publish and after fetch. */
 export function cacheThemeCss(cssText) {
-  try {
-    sessionStorage.setItem(CACHE_KEY, cssText)
-  } catch { /* non-fatal: private browsing quota */ }
+  try { sessionStorage.setItem(CACHE_KEY, cssText) } catch { /* non-fatal */ }
 }
 
 /** Read cached theme CSS text. Returns null if nothing is cached. */
 export function getCachedThemeCss() {
-  try {
-    return sessionStorage.getItem(CACHE_KEY) || null
-  } catch {
-    return null
-  }
+  try { return sessionStorage.getItem(CACHE_KEY) || null } catch { return null }
 }
 
 /** Clear the cached theme (called on logout). */
 export function clearThemeCache() {
-  try {
-    sessionStorage.removeItem(CACHE_KEY)
-  } catch { /* non-fatal */ }
+  try { sessionStorage.removeItem(CACHE_KEY) } catch { /* non-fatal */ }
 }
 
-// ── Upload ────────────────────────────────────────────────────────────────────
+// ── Upload ──────────────────────────────────────────────────────────────────
 
 function fileToBase64(file) {
   return new Promise((resolve, reject) => {
@@ -171,10 +128,6 @@ function fileToBase64(file) {
   })
 }
 
-/**
- * Upload theme CSS and optional logo to the backend as JSON.
- * Also caches the CSS text immediately so the next page load is instant.
- */
 export async function uploadTheme(cssText, filename, logoFile, idToken) {
   const body = { css_text: cssText, filename }
   if (logoFile) {
@@ -182,44 +135,20 @@ export async function uploadTheme(cssText, filename, logoFile, idToken) {
     body.logo_mime_type = logoFile.type || 'image/png'
     body.logo_filename  = logoFile.name
   }
-
   const res = await fetch(`${API}/tenant/branding`, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
     body:    JSON.stringify(body),
   })
-
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
     throw new Error(err.detail ?? `Upload failed (HTTP ${res.status})`)
   }
-
-  const result = await res.json()   // { css_file, logo_url }
-
-  // Cache the final CSS (with real logo URL, not blob:) immediately.
-  // This means the next page load / navigation injects the new theme
-  // synchronously from sessionStorage — no fetch required.
-  const finalCss = generateThemeCss({
-    primary:      _extractPrimary(cssText),
-    primaryHover: _extractPrimaryHover(cssText),
-    logoUrl:      result.logo_url ?? '',
-    tenantId:     _extractTenantId(cssText),
-    timestamp:    Date.now(),
-  })
-  cacheThemeCss(finalCss)
-
-  return result
+  return res.json()   // { css_file, logo_url }
 }
 
-// ── Boot loader ───────────────────────────────────────────────────────────────
+// ── Boot loader ──────────────────────────────────────────────────────────────
 
-/**
- * Fetch the tenant's published theme CSS from the API and inject + cache it.
- *
- * Called by App.jsx only when the sessionStorage cache is empty (i.e. first
- * login of the session). Subsequent navigations use getCachedThemeCss()
- * which is synchronous and needs no network call.
- */
 export async function loadTenantTheme(cssFile, idToken) {
   if (!cssFile) return
   try {
@@ -229,29 +158,22 @@ export async function loadTenantTheme(cssFile, idToken) {
     )
     if (!res.ok) return
     const cssText = await res.text()
-    cacheThemeCss(cssText)   // cache for instant injection on next load
+    cacheThemeCss(cssText)
     injectTheme(cssText)
   } catch { /* non-fatal */ }
 }
 
-// ── Private CSS-text parsers (used by uploadTheme) ────────────────────────────
+// ── Private CSS-text parsers ───────────────────────────────────────────────────
+// (kept for uploadTheme — no longer used by BrandingPanel)
 
 function _extractValue(cssText, prop) {
   for (const line of cssText.split('\n')) {
     const s = line.trim()
     if (s.startsWith(prop) && !s.includes('var(')) {
-      return s.split(':', 1).slice(1).join(':').replace(s.split(':')[0] + ':', '').trim().replace(/;$/, '').trim()
+      return s.replace(prop, '').replace(/;$/, '').trim()
     }
   }
   return ''
 }
-
-function _extractPrimary(cssText)      { return _extractValue(cssText, '--brand-primary:') }
-function _extractPrimaryHover(cssText) { return _extractValue(cssText, '--brand-primary-h:') }
-function _extractTenantId(cssText) {
-  for (const line of cssText.split('\n')) {
-    const m = line.match(/\*\s*Tenant\s*:\s*(.+)/)
-    if (m) return m[1].trim()
-  }
-  return ''
-}
+export function extractPrimary(cssText)      { return _extractValue(cssText, '--brand-primary:') }
+export function extractPrimaryHover(cssText) { return _extractValue(cssText, '--brand-primary-h:') }

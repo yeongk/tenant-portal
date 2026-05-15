@@ -2,15 +2,13 @@ import React, { useEffect, useRef, useState } from 'react'
 import { useApi } from '../hooks/useApi'
 import { useToast } from '../context/ToastContext'
 import { useAuth } from '../context/AuthContext'
+import { useBranding } from '../context/BrandingContext'
 import {
   THEME_COLORS,
   deriveHover,
   generateThemeCss,
   injectTheme,
-  injectPreviewTheme,
-  removePreviewTheme,
   cacheThemeCss,
-  getCachedThemeCss,
   uploadTheme,
 } from '../utils/brandingTheme'
 
@@ -22,6 +20,7 @@ function isValidHex(h) {
 
 function BrandingPanel({ tenant, idToken, onPublished }) {
   const toast = useToast()
+  const { setBranding } = useBranding()
 
   const initColor = THEME_COLORS.find(c => c.primary === tenant?.brand_color) ?? THEME_COLORS[0]
 
@@ -31,9 +30,7 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
   const [logoPreviewUrl,  setLogoPreviewUrl]    = useState(tenant?.brand_logo_url ?? '')
   const [publishing,      setPublishing]        = useState(false)
   const [dirty,           setDirty]             = useState(false)
-  const fileRef      = useRef(null)
-  const publishedRef = useRef(false)
-  const dirtyRef     = useRef(false)
+  const fileRef = useRef(null)
 
   const resolveColors = () => {
     if (selectedColorId === 'custom') {
@@ -44,58 +41,13 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
     return { primary: preset.primary, primaryHover: preset.primaryHover }
   }
 
-  // ── Preview injection ────────────────────────────────────────────────────────
-  //
-  // Writes ONLY to <style id="tenant-preview"> — a separate tag that sits after
-  // <style id="tenant-theme"> in <head> and therefore overrides its :root vars
-  // via CSS specificity/order. The real published tag is never touched here.
-  //
-  // Only inject the preview tag when the user has made a local change (dirty).
-  // On first mount with no changes the published theme is already correct and
-  // the preview tag should not exist.
-  useEffect(() => {
-    if (!dirtyRef.current) return   // no unpublished changes — leave real theme alone
-    const { primary, primaryHover } = resolveColors()
-    injectPreviewTheme(generateThemeCss({
-      primary, primaryHover,
-      logoUrl:   logoPreviewUrl,
-      tenantId:  tenant?.tenant_id ?? '',
-      timestamp: Date.now(),
-    }))
-  }, [selectedColorId, customHex, logoPreviewUrl])
+  // No style-tag injection on picker change.
+  // The subpanel preview is rendered with inline JS state (the `primary`
+  // variable below), so it updates instantly with no DOM side-effects.
+  // The real portal chrome (Topbar) reads from BrandingContext, which is
+  // only updated on a successful Publish.
 
-  // ── Unmount cleanup ──────────────────────────────────────────────────────────
-  //
-  // Always remove the preview tag — it must not persist after the panel closes.
-  //
-  // If the user made changes but did NOT publish:
-  //   - Restore the last published CSS from sessionStorage cache into the real
-  //     <style id="tenant-theme"> tag so the portal snaps back to the correct
-  //     published theme.
-  //   - If there is no cached CSS (tenant has never published a theme) remove
-  //     the real tag too — there is nothing to restore.
-  //
-  // If the user published, or made no changes:
-  //   - The real <style id="tenant-theme"> tag is already correct — leave it.
-  useEffect(() => {
-    return () => {
-      removePreviewTheme()
-      if (dirtyRef.current && !publishedRef.current) {
-        const published = getCachedThemeCss()
-        if (published) {
-          injectTheme(published)   // restore last published theme
-        } else {
-          // No published theme has ever been set — leave the base theme
-          // (do not inject anything; the base CSS vars from theme.base.css apply)
-        }
-      }
-    }
-  }, [])
-
-  const markDirty = () => {
-    setDirty(true)
-    dirtyRef.current = true
-  }
+  const markDirty = () => setDirty(true)
 
   const handleColorChange = (id) => { setSelectedColorId(id); markDirty() }
   const handleCustomHex   = (v)  => { setCustomHex(v);        markDirty() }
@@ -127,7 +79,6 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
     try {
       const result = await uploadTheme(cssText, filename, logoFile, idToken)
 
-      // Build final CSS with the confirmed S3 logo URL
       const finalCss = generateThemeCss({
         primary, primaryHover,
         logoUrl:  result.logo_url ?? '',
@@ -135,20 +86,16 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
         timestamp,
       })
 
-      // 1. Inject into <style id="tenant-theme"> — this IS the publish moment.
-      //    From here on the portal chrome reflects the new theme.
+      // 1. Inject into <style id="tenant-theme"> (CSS vars for any non-React
+      //    consumers that still read them, e.g. Sidebar accent colour).
       injectTheme(finalCss)
 
-      // 2. Write to sessionStorage cache so session navigations and page
-      //    refreshes both get the new theme instantly.
+      // 2. Cache so session navigations and page refreshes are instant.
       cacheThemeCss(finalCss)
 
-      // 3. Remove the preview tag — no longer needed; the real tag is correct.
-      removePreviewTheme()
-
-      // 4. Mark as published so unmount cleanup doesn't restore the old theme.
-      publishedRef.current = true
-      dirtyRef.current     = false
+      // 3. Update BrandingContext — this is what makes Topbar re-render
+      //    with the new colour and logo. The ONLY place setBranding is called.
+      setBranding({ primary, logoUrl: result.logo_url ?? '' })
 
       toast(`Theme published: ${filename}`)
       setDirty(false)
@@ -269,9 +216,8 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
       </div>
 
       {/* ── Live preview column ── */}
-      {/* NOTE: this panel renders with inline JS state (the `primary` var from  */}
-      {/* resolveColors()), NOT from CSS vars. It is intentionally self-contained */}
-      {/* so it shows the pending colour without affecting the portal chrome.      */}
+      {/* Renders entirely from local picker state (`primary`, `logoPreviewUrl`). */}
+      {/* No CSS vars, no style-tag injection — self-contained, zero side-effects. */}
       <div>
         <div className="card" style={{ padding: 20 }}>
           <h3 style={{ fontWeight: 600, fontSize: 14, marginBottom: 16 }}>Live Preview</h3>
@@ -323,7 +269,7 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
           <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
             <div style={{ width: 22, height: 22, borderRadius: 4, background: primary, border: '1px solid var(--border)' }} />
             <span style={{ fontSize: 11, color: 'var(--muted)', fontFamily: 'monospace' }}>{primary}</span>
-            <span style={{ fontSize: 11, color: 'var(--muted)' }}>— brand primary</span>
+            <span style={{ fontSize: 11, color: 'var(--muted)' }}>— brand primary (preview)</span>
           </div>
         </div>
       </div>
