@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useCallback } from 'react'
+import { clearThemeCache } from '../utils/brandingTheme'
 
 const Ctx = createContext(null)
 
@@ -8,17 +9,13 @@ const Ctx = createContext(null)
  *   id_token:  string   — Cognito ID token (JWT)
  *   tenant_id: string   — tenant slug, e.g. 'porsche-sf'
  *   shop_name: string   — human-readable shop name
- *   user_type: string   — 'STAFF' | 'CLIENT'  (custom:userType claim)
- *   cog_group: string   — highest Cognito group for STAFF users:
- *                         'SHOP_ADMIN' | 'SUPERVISOR' | 'MECHANIC'
- *                         Empty string for CLIENT users or when group
- *                         cannot be determined.
+ *   user_type: string   — 'STAFF' | 'CLIENT'
+ *   cog_group: string   — 'SHOP_ADMIN' | 'SUPERVISOR' | 'MECHANIC' | ''
  * }
  *
- * Access control rules:
- *   Portal entry   : user_type === 'STAFF'
- *   Branding edit  : user_type === 'STAFF' && cog_group === 'SHOP_ADMIN'
- *   All other pages: any authenticated STAFF member
+ * Theme cache stored separately under 'tp_theme_css' (see brandingTheme.js).
+ * Cleared on logout so a different user on the same machine doesn't see the
+ * previous tenant's branding.
  */
 
 export function AuthProvider({ children }) {
@@ -36,6 +33,7 @@ export function AuthProvider({ children }) {
 
   const logout = useCallback(() => {
     sessionStorage.removeItem('tp_sess')
+    clearThemeCache()   // clear tenant theme so next login starts fresh
     setSession(null)
   }, [])
 
@@ -45,8 +43,8 @@ export function AuthProvider({ children }) {
       tenantId:  session?.tenant_id  ?? '',
       shopName:  session?.shop_name  ?? '',
       idToken:   session?.id_token   ?? '',
-      userType:  session?.user_type  ?? '',   // 'STAFF' | 'CLIENT'
-      cogGroup:  session?.cog_group  ?? '',   // 'SHOP_ADMIN' | 'SUPERVISOR' | 'MECHANIC'
+      userType:  session?.user_type  ?? '',
+      cogGroup:  session?.cog_group  ?? '',
       isAdmin:   session?.user_type === 'STAFF' && session?.cog_group === 'SHOP_ADMIN',
       login,
       logout,
