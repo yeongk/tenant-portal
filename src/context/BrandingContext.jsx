@@ -3,46 +3,53 @@
  *
  * Holds the PUBLISHED tenant branding as React state:
  *   primary   — brand hex colour, e.g. '#4338ca'
- *   logoUrl   — S3 logo URL, or '' if none
+ *   logoUrl   — presigned S3 URL for the tenant logo, or '' if none
  *
  * Topbar reads from this context so it only re-renders when the context
- * value changes — which happens exclusively on a successful Publish.
+ * value changes — which happens on:
+ *   1. ThemeInitializer mount (seeds logo from live API on every page load)
+ *   2. Successful Publish in BrandingPanel
  *
- * Unpublished picker changes in BrandingPanel never touch this context,
- * so the live portal chrome is unaffected until Publish is clicked.
+ * Unpublished picker changes in BrandingPanel never touch this context.
  *
- * Initialisation (in BrandingProvider):
- *   Parse the last published CSS from sessionStorage ('tp_theme_css') to
- *   seed the initial state. This is the same CSS that App.jsx injects into
- *   the <style id="tenant-theme"> tag, so the two are always in sync.
- *   Falls back to empty strings when no theme has ever been published.
+ * Why CSS cache is NOT used for logoUrl
+ * ──────────────────────────────────────
+ * The cached CSS embeds whatever URL was current at publish time. S3
+ * presigned URLs expire after 1 hour, so a cached URL is stale on the
+ * next session. The colour (#brand-primary) is a plain hex — stable
+ * forever — so it is safe to seed from the CSS cache. The logo URL must
+ * always come from a live GET /api/tenant call which generates a fresh
+ * presigned URL on demand.
  */
 
 import React, { createContext, useContext, useState } from 'react'
 import { getCachedThemeCss } from '../utils/brandingTheme'
 
-const BrandingCtx = createContext({ primary: '', logoUrl: '', setBranding: () => {} })
+const BrandingCtx = createContext({
+  primary:     '',
+  logoUrl:     '',
+  setBranding: () => {},
+})
 
-/** Parse --brand-primary and --brand-logo-url from raw CSS text. */
-function parseCss(cssText) {
-  let primary = ''
-  let logoUrl = ''
-  if (!cssText) return { primary, logoUrl }
+/** Extract only --brand-primary from cached CSS (stable hex, safe to cache). */
+function parsePrimaryFromCss(cssText) {
+  if (!cssText) return ''
   for (const line of cssText.split('\n')) {
     const s = line.trim()
-    if (!primary && s.startsWith('--brand-primary:') && !s.includes('var(')) {
-      primary = s.replace('--brand-primary:', '').replace(';', '').trim()
-    }
-    if (!logoUrl && s.startsWith('--brand-logo-url:') && s.includes('url(')) {
-      const m = s.match(/url\(['"]?([^'"\)\s]+)['"]?\)/)
-      if (m) logoUrl = m[1]
+    if (s.startsWith('--brand-primary:') && !s.includes('var(')) {
+      return s.replace('--brand-primary:', '').replace(';', '').trim()
     }
   }
-  return { primary, logoUrl }
+  return ''
 }
 
 export function BrandingProvider({ children }) {
-  const [branding, setBranding] = useState(() => parseCss(getCachedThemeCss()))
+  // Seed primary colour instantly from sessionStorage (zero network delay).
+  // logoUrl starts empty — ThemeInitializer fills it from GET /api/tenant.
+  const [branding, setBranding] = useState(() => ({
+    primary: parsePrimaryFromCss(getCachedThemeCss()),
+    logoUrl: '',
+  }))
 
   return (
     <BrandingCtx.Provider value={{ ...branding, setBranding }}>

@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider } from './context/AuthContext'
 import { ToastProvider } from './context/ToastContext'
 import { BrandingProvider } from './context/BrandingContext'
+import ThemeInitializer from './components/ThemeInitializer'
 import ProtectedLayout from './layouts/ProtectedLayout'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
@@ -52,55 +53,39 @@ function resolveGroup(claims) {
   window.history.replaceState(null, '', window.location.pathname + window.location.search)
 })()
 
-// ── Tenant theme — synchronous inject + background refresh ──────────────────
+// ── Tenant theme CSS — synchronous inject + background refresh ─────────────────
 //
-// TWO-TIER strategy (no CloudFront involvement, no invalidation delay):
+// Responsible ONLY for the CSS <style> tag (— CSS vars consumed by Sidebar,
+// buttons, etc.). The Topbar logo and colour come from BrandingContext which
+// is hydrated by ThemeInitializer via GET /api/tenant on every mount.
 //
-// Tier 1 — Synchronous, before React mounts (zero delay):
-//   Read the theme CSS from sessionStorage ('tp_theme_css') and inject it
-//   immediately. This covers every navigation after the first load in the
-//   session and every load after a publish (publish writes to the cache).
+// TWO-TIER strategy:
 //
-// Tier 2 — Background fetch, first load only (cache miss):
-//   When the cache is empty (fresh login), fire an async fetch of
-//   GET /api/tenant → GET /api/tenant/branding/css, then inject and cache.
-//   A brief FOUC on the very first page load is acceptable and unavoidable
-//   without SSR. All subsequent loads in the session are instant (Tier 1).
+// Tier 1 — Synchronous cache hit (zero delay):
+//   Inject cached CSS from sessionStorage. Covers every SPA navigation and
+//   every page load after a publish.
 //
-// On publish: Settings.jsx calls cacheThemeCss(finalCss) immediately after
-//   the upload succeeds, so the next load (or React route change) reflects
-//   the new theme without any fetch.
-//
-// NOTE: this IIFE only sets the CSS vars on the <style> tag. The Topbar
-// reads its colours from BrandingContext (React state), which is seeded
-// from the same sessionStorage cache in BrandingProvider. Both stay in sync.
+// Tier 2 — Background fetch, cache miss only:
+//   Fresh login with empty cache: fetch CSS file from API, inject, cache.
+//   ThemeInitializer handles the logo URL in both tiers via GET /api/tenant.
 
-;(function applyTenantTheme() {
+;(function applyTenantThemeCss() {
   try {
-    // Tier 1 — synchronous cache hit
     const cached = getCachedThemeCss()
     if (cached) {
       injectTheme(cached)
-      return   // nothing more to do — theme is already live
+      return
     }
-
-    // Tier 2 — cache miss: background fetch
     const raw = sessionStorage.getItem('tp_sess')
     if (!raw) return
     const sess = JSON.parse(raw)
     if (!sess?.id_token) return
-
     const API = `${import.meta.env.VITE_API_URL ?? 'http://localhost:3000'}/api`
     fetch(`${API}/tenant`, { headers: { Authorization: `Bearer ${sess.id_token}` } })
       .then(r => r.ok ? r.json() : null)
-      .then(tenant => {
-        if (tenant?.brand_css_file) {
-          // loadTenantTheme fetches the CSS, injects it, and caches it
-          loadTenantTheme(tenant.brand_css_file, sess.id_token)
-        }
-      })
-      .catch(() => { /* non-fatal */ })
-  } catch { /* non-fatal */ }
+      .then(tenant => { if (tenant?.brand_css_file) loadTenantTheme(tenant.brand_css_file, sess.id_token) })
+      .catch(() => {})
+  } catch {}
 })()
 
 // ── App ───────────────────────────────────────────────────────────────────
@@ -110,6 +95,13 @@ export default function App() {
     <AuthProvider>
       <ToastProvider>
         <BrandingProvider>
+          {/*
+            ThemeInitializer sits inside BrandingProvider so it can call
+            setBranding(). It fires GET /api/tenant once on mount and pushes
+            the fresh presigned logo URL (and brand colour) into context.
+            Renders nothing — purely a side-effect component.
+          */}
+          <ThemeInitializer />
           <BrowserRouter>
             <Routes>
               <Route path="/login" element={<Login />} />
