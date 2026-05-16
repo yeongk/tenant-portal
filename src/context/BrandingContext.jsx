@@ -14,6 +14,15 @@
  * useEffect would have run on mount with idToken='' (unauthenticated) and
  * returned early, then re-runs when idToken is set after login().
  *
+ * CSS injection on fresh login
+ * ────────────────────────────
+ * Sidebar and other elements read var(--accent) / var(--brand-primary) from
+ * the <style id="tenant-theme"> tag. On hard page loads, App.jsx's IIFE
+ * injects it from the sessionStorage cache (or fetches it on cache miss).
+ * On fresh SPA login the IIFE already ran before the session existed, so
+ * the CSS tag was never injected for that session. This context fixes it by
+ * calling loadTenantTheme() after the hydration fetch when the cache is empty.
+ *
  * Race-condition safety
  * ─────────────────────
  * setBranding() (called by BrandingPanel on Publish) increments publishSeq.
@@ -31,7 +40,7 @@ import React, {
   createContext, useCallback, useContext, useEffect, useRef, useState,
 } from 'react'
 import { useAuth } from './AuthContext'
-import { getCachedThemeCss } from '../utils/brandingTheme'
+import { getCachedThemeCss, loadTenantTheme } from '../utils/brandingTheme'
 
 const API = `${import.meta.env.VITE_API_URL ?? 'http://localhost:3000'}/api`
 
@@ -74,7 +83,7 @@ export function BrandingProvider({ children }) {
   // Runs on mount (if already authenticated) AND after fresh login
   // (when idToken transitions from '' to a real value).
   useEffect(() => {
-    if (!idToken) return   // not authenticated yet
+    if (!idToken) return
 
     let cancelled = false
     const seqAtStart = publishSeqRef.current
@@ -95,11 +104,22 @@ export function BrandingProvider({ children }) {
         const freshLogo    = tenant?.brand_logo_url ?? ''
         const freshPrimary = tenant?.brand_color    ?? ''
 
+        // Update React state — drives Topbar colour and logo.
         _setBranding(prev => ({
           primary: freshPrimary || prev.primary,
           logoUrl: freshLogo,
         }))
-      } catch { /* non-fatal — Topbar falls back to initial-letter avatar */ }
+
+        // Inject the CSS <style> tag if the cache is still empty.
+        // Covers the fresh-login case: App.jsx's IIFE ran before the session
+        // existed so it couldn't inject anything. loadTenantTheme() fetches
+        // the CSS file, injects <style id="tenant-theme">, and writes to
+        // sessionStorage — Sidebar's var(--accent) resolves correctly and
+        // all subsequent loads in the session are instant (IIFE cache hit).
+        if (!getCachedThemeCss() && tenant?.brand_css_file) {
+          loadTenantTheme(tenant.brand_css_file, idToken)
+        }
+      } catch { /* non-fatal */ }
     }
 
     hydrate()
