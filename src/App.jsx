@@ -3,7 +3,6 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider } from './context/AuthContext'
 import { ToastProvider } from './context/ToastContext'
 import { BrandingProvider } from './context/BrandingContext'
-import ThemeInitializer from './components/ThemeInitializer'
 import ProtectedLayout from './layouts/ProtectedLayout'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
@@ -31,8 +30,6 @@ function resolveGroup(claims) {
 }
 
 // ── Hash-token bootstrap ───────────────────────────────────────────────────────
-// Runs synchronously before React mounts so AuthContext reads the correct
-// session from sessionStorage on its very first render.
 
 ;(function bootstrapFromHash() {
   const hash = window.location.hash.slice(1)
@@ -40,7 +37,7 @@ function resolveGroup(claims) {
   const params  = new URLSearchParams(hash)
   const idToken = params.get('token')
   if (!idToken) return
-  const claims   = decodeJwt(idToken)
+  const claims = decodeJwt(idToken)
   try {
     sessionStorage.setItem('tp_sess', JSON.stringify({
       id_token:  idToken,
@@ -53,37 +50,27 @@ function resolveGroup(claims) {
   window.history.replaceState(null, '', window.location.pathname + window.location.search)
 })()
 
-// ── Tenant theme CSS — synchronous inject + background refresh ─────────────────
+// ── Tenant theme CSS — synchronous inject (CSS vars only) ───────────────────
 //
-// Responsible ONLY for the CSS <style> tag (— CSS vars consumed by Sidebar,
-// buttons, etc.). The Topbar logo and colour come from BrandingContext which
-// is hydrated by ThemeInitializer via GET /api/tenant on every mount.
-//
-// TWO-TIER strategy:
-//
-// Tier 1 — Synchronous cache hit (zero delay):
-//   Inject cached CSS from sessionStorage. Covers every SPA navigation and
-//   every page load after a publish.
-//
-// Tier 2 — Background fetch, cache miss only:
-//   Fresh login with empty cache: fetch CSS file from API, inject, cache.
-//   ThemeInitializer handles the logo URL in both tiers via GET /api/tenant.
+// Injects the cached CSS <style> tag so Sidebar accent colour and other
+// var(--brand-*) consumers render correctly without any network delay.
+// Logo URL hydration is handled by BrandingContext's useEffect (one fetch
+// on mount via GET /api/tenant — always returns a fresh presigned URL).
 
 ;(function applyTenantThemeCss() {
   try {
     const cached = getCachedThemeCss()
-    if (cached) {
-      injectTheme(cached)
-      return
-    }
+    if (cached) { injectTheme(cached); return }
+
+    // Cache miss (fresh login) — background fetch for CSS only
     const raw = sessionStorage.getItem('tp_sess')
     if (!raw) return
-    const sess = JSON.parse(raw)
-    if (!sess?.id_token) return
-    const API = `${import.meta.env.VITE_API_URL ?? 'http://localhost:3000'}/api`
-    fetch(`${API}/tenant`, { headers: { Authorization: `Bearer ${sess.id_token}` } })
+    const { id_token } = JSON.parse(raw)
+    if (!id_token) return
+    const BASE = `${import.meta.env.VITE_API_URL ?? 'http://localhost:3000'}/api`
+    fetch(`${BASE}/tenant`, { headers: { Authorization: `Bearer ${id_token}` } })
       .then(r => r.ok ? r.json() : null)
-      .then(tenant => { if (tenant?.brand_css_file) loadTenantTheme(tenant.brand_css_file, sess.id_token) })
+      .then(t => { if (t?.brand_css_file) loadTenantTheme(t.brand_css_file, id_token) })
       .catch(() => {})
   } catch {}
 })()
@@ -95,13 +82,6 @@ export default function App() {
     <AuthProvider>
       <ToastProvider>
         <BrandingProvider>
-          {/*
-            ThemeInitializer sits inside BrandingProvider so it can call
-            setBranding(). It fires GET /api/tenant once on mount and pushes
-            the fresh presigned logo URL (and brand colour) into context.
-            Renders nothing — purely a side-effect component.
-          */}
-          <ThemeInitializer />
           <BrowserRouter>
             <Routes>
               <Route path="/login" element={<Login />} />

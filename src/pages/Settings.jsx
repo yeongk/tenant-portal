@@ -27,6 +27,10 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
   const [selectedColorId, setSelectedColorId] = useState(initColor.id)
   const [customHex,       setCustomHex]        = useState(tenant?.brand_color ?? '#3d7a28')
   const [logoFile,        setLogoFile]          = useState(null)
+  // logoPreviewUrl: the best available displayable URL for the current logo.
+  // Seeded from tenant.brand_logo_url (fresh presigned URL from GET /api/tenant
+  // called by Settings on mount). Updated to blob: on local file select,
+  // and to the new presigned URL on successful publish.
   const [logoPreviewUrl,  setLogoPreviewUrl]    = useState(tenant?.brand_logo_url ?? '')
   const [publishing,      setPublishing]        = useState(false)
   const [dirty,           setDirty]             = useState(false)
@@ -41,14 +45,7 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
     return { primary: preset.primary, primaryHover: preset.primaryHover }
   }
 
-  // No style-tag injection on picker change.
-  // The subpanel preview is rendered with inline JS state (the `primary`
-  // variable below), so it updates instantly with no DOM side-effects.
-  // The real portal chrome (Topbar) reads from BrandingContext, which is
-  // only updated on a successful Publish.
-
   const markDirty = () => setDirty(true)
-
   const handleColorChange = (id) => { setSelectedColorId(id); markDirty() }
   const handleCustomHex   = (v)  => { setCustomHex(v);        markDirty() }
 
@@ -68,9 +65,13 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
 
     const timestamp = Date.now()
     const filename  = `theme.tenant.${timestamp}.css`
-    const cssText   = generateThemeCss({
+
+    // Do not embed blob: URLs or presigned URLs in the stored CSS.
+    // For the initial CSS upload we omit the logo URL — the backend
+    // stores the S3 key separately and the CSS is only used for colour vars.
+    const cssText = generateThemeCss({
       primary, primaryHover,
-      logoUrl:  logoPreviewUrl.startsWith('blob:') ? '' : logoPreviewUrl,
+      logoUrl:  '',           // never embed expiring URLs in stored CSS
       tenantId: tenant?.tenant_id ?? '',
       timestamp,
     })
@@ -78,24 +79,33 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
     setPublishing(true)
     try {
       const result = await uploadTheme(cssText, filename, logoFile, idToken)
+      // result.logo_url:
+      //   • Non-empty presigned URL — a new logo was uploaded this publish
+      //   • ''                      — colour-only change, logo unchanged
+      //
+      // For the Topbar we need a displayable logo URL right now:
+      //   • New logo   → use result.logo_url (fresh presigned URL, valid 1h)
+      //   • No new logo → use logoPreviewUrl, which was seeded from
+      //                   tenant.brand_logo_url (fresh presigned URL fetched
+      //                   by Settings on mount via GET /api/tenant). It is
+      //                   still valid as long as publish happens within 1h
+      //                   of opening Settings — a safe assumption.
+      //                   If it is a blob: URL the user just picked a file
+      //                   but somehow didn't upload — treat as no logo.
+      const currentLogoUrl = logoPreviewUrl.startsWith('blob:') ? '' : logoPreviewUrl
+      const effectiveLogoUrl = result.logo_url || currentLogoUrl
 
+      // Update CSS vars (Sidebar accent, buttons, etc.)
       const finalCss = generateThemeCss({
-        primary, primaryHover,
-        logoUrl:  result.logo_url ?? '',
-        tenantId: tenant?.tenant_id ?? '',
-        timestamp,
+        primary, primaryHover, logoUrl: '', tenantId: tenant?.tenant_id ?? '', timestamp,
       })
-
-      // 1. Inject into <style id="tenant-theme"> (CSS vars for any non-React
-      //    consumers that still read them, e.g. Sidebar accent colour).
       injectTheme(finalCss)
-
-      // 2. Cache so session navigations and page refreshes are instant.
       cacheThemeCss(finalCss)
 
-      // 3. Update BrandingContext — this is what makes Topbar re-render
-      //    with the new colour and logo. The ONLY place setBranding is called.
-      setBranding({ primary, logoUrl: result.logo_url ?? '' })
+      // Update BrandingContext — this is what makes Topbar re-render.
+      // setBranding increments publishSeq so BrandingContext's background
+      // hydration fetch (if still in flight) will discard its stale result.
+      setBranding({ primary, logoUrl: effectiveLogoUrl })
 
       toast(`Theme published: ${filename}`)
       setDirty(false)
@@ -104,7 +114,7 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
       onPublished({
         brand_color:    primary,
         brand_css_file: result.css_file,
-        brand_logo_url: result.logo_url,
+        brand_logo_url: effectiveLogoUrl,
       })
     } catch (err) {
       toast(err.message, 'error')
@@ -216,8 +226,6 @@ function BrandingPanel({ tenant, idToken, onPublished }) {
       </div>
 
       {/* ── Live preview column ── */}
-      {/* Renders entirely from local picker state (`primary`, `logoPreviewUrl`). */}
-      {/* No CSS vars, no style-tag injection — self-contained, zero side-effects. */}
       <div>
         <div className="card" style={{ padding: 20 }}>
           <h3 style={{ fontWeight: 600, fontSize: 14, marginBottom: 16 }}>Live Preview</h3>
