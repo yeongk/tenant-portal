@@ -30,6 +30,9 @@ function resolveGroup(claims) {
 }
 
 // ── Hash-token bootstrap ───────────────────────────────────────────────────────
+// Handles the case where the user arrives via a redirect URL containing
+// the session token in the hash (e.g. from the SaaS registration flow).
+// Runs synchronously before React mounts.
 
 ;(function bootstrapFromHash() {
   const hash = window.location.hash.slice(1)
@@ -52,17 +55,26 @@ function resolveGroup(claims) {
 
 // ── Tenant theme CSS — synchronous inject (CSS vars only) ───────────────────
 //
-// Injects the cached CSS <style> tag so Sidebar accent colour and other
-// var(--brand-*) consumers render correctly without any network delay.
-// Logo URL hydration is handled by BrandingContext's useEffect (one fetch
-// on mount via GET /api/tenant — always returns a fresh presigned URL).
+// Injects the <style id="tenant-theme"> tag from the sessionStorage cache
+// so Sidebar accent colour and var(--brand-*) consumers render without delay.
+//
+// On cache miss (fresh login via the Login page form — not hash redirect):
+// does nothing here. BrandingContext's useEffect fires after login() sets
+// idToken, fetches GET /api/tenant, and from there loadTenantTheme() fetches
+// and caches the CSS. Subsequent page loads hit Tier 1 (cache hit) instantly.
+//
+// On cache hit (returning session / post-publish):
+// injects immediately before React mounts — zero flash.
 
 ;(function applyTenantThemeCss() {
   try {
     const cached = getCachedThemeCss()
     if (cached) { injectTheme(cached); return }
 
-    // Cache miss (fresh login) — background fetch for CSS only
+    // Cache miss — only possible for hash-redirect logins (bootstrapFromHash
+    // ran just above). Fire a background fetch to populate the CSS cache so
+    // the next page load is instant. BrandingContext handles the React-state
+    // side (primary colour, logoUrl) via its own idToken-triggered useEffect.
     const raw = sessionStorage.getItem('tp_sess')
     if (!raw) return
     const { id_token } = JSON.parse(raw)
@@ -76,12 +88,20 @@ function resolveGroup(claims) {
 })()
 
 // ── App ───────────────────────────────────────────────────────────────────
+//
+// Provider nesting order matters:
+//   AuthProvider       — owns idToken / session
+//     BrandingProvider — watches idToken to trigger branding hydration
+//       ToastProvider
+//         BrowserRouter
+//
+// BrandingProvider must be INSIDE AuthProvider so it can call useAuth().
 
 export default function App() {
   return (
     <AuthProvider>
-      <ToastProvider>
-        <BrandingProvider>
+      <BrandingProvider>
+        <ToastProvider>
           <BrowserRouter>
             <Routes>
               <Route path="/login" element={<Login />} />
@@ -97,8 +117,8 @@ export default function App() {
               <Route path="*" element={<Navigate to="/dashboard" replace />} />
             </Routes>
           </BrowserRouter>
-        </BrandingProvider>
-      </ToastProvider>
+        </ToastProvider>
+      </BrandingProvider>
     </AuthProvider>
   )
 }
