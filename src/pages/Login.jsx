@@ -5,7 +5,7 @@ import { useAuth } from '../context/AuthContext'
 const BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:3000'
 const API  = `${BASE}/api`
 
-// ── helpers ───────────────────────────────────────────────────────────────────
+// ── helpers ────────────────────────────────────────────────────────────────
 
 function decodeJwt(t) {
   try { return JSON.parse(atob(t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))) }
@@ -36,7 +36,7 @@ function passwordStrength(pw) {
   return             { label: 'Strong', color: '#16a34a' }
 }
 
-// ── component ─────────────────────────────────────────────────────────────────
+// ── component ──────────────────────────────────────────────────────────────────
 
 export default function Login() {
   const { login } = useAuth()
@@ -54,13 +54,27 @@ export default function Login() {
   // while waiting for the user to complete the change-password step
   const [pendingSession, setPendingSession] = useState(null)
 
-  // change-password step
-  const [newPw,    setNewPw]    = useState('')
-  const [confirmPw, setConfirmPw] = useState('')
-  const [pwLoading, setPwLoading] = useState(false)
-  const [pwError,   setPwError]   = useState('')
-  const [showNew,    setShowNew]   = useState(false)
-  const [showConf,   setShowConf]  = useState(false)
+  // change-password step (first login)
+  const [newPw,      setNewPw]      = useState('')
+  const [confirmPw,  setConfirmPw]  = useState('')
+  const [pwLoading,  setPwLoading]  = useState(false)
+  const [pwError,    setPwError]    = useState('')
+  const [showNew,    setShowNew]    = useState(false)
+  const [showConf,   setShowConf]   = useState(false)
+
+  // ── forgot-password flow ──────────────────────────────────────────────
+  // 'forgot'  — email entry + send-code form
+  // 'reset'   — code + new password form
+  // 'done'    — success confirmation before redirect
+  const [forgotStep,    setForgotStep]    = useState(null)  // null | 'forgot' | 'reset' | 'done'
+  const [forgotEmail,   setForgotEmail]   = useState('')
+  const [resetCode,     setResetCode]     = useState('')
+  const [resetPw,       setResetPw]       = useState('')
+  const [resetPwConf,   setResetPwConf]   = useState('')
+  const [forgotLoading, setForgotLoading] = useState(false)
+  const [forgotError,   setForgotError]   = useState('')
+  const [showResetPw,   setShowResetPw]   = useState(false)
+  const [showResetConf, setShowResetConf] = useState(false)
 
   // ── After Cognito auth completes — check password_changed flag ──────────
 
@@ -80,12 +94,10 @@ export default function Login() {
     }
 
     if (data.password_changed === false) {
-      // First login — hold session, show change-password step
       setPendingSession({ ...session, email: email || mfa?.email || '' })
       return
     }
 
-    // Normal login — go straight to dashboard
     login(session)
     nav('/dashboard')
   }
@@ -106,7 +118,7 @@ export default function Login() {
     } catch { setError('Network error') } finally { setLoading(false) }
   }
 
-  // ── MFA completion ───────────────────────────────────────────────────────
+  // ── MFA completion ────────────────────────────────────────────────────────
 
   const handleMfa = async (e) => {
     e.preventDefault(); setError(''); setLoading(true)
@@ -125,7 +137,7 @@ export default function Login() {
     } catch { setError('Network error') } finally { setLoading(false) }
   }
 
-  // ── Change password (first login) ────────────────────────────────────────
+  // ── Change password (first login) ──────────────────────────────────────
 
   const handleChangePassword = async (e) => {
     e.preventDefault(); setPwError('')
@@ -154,11 +166,60 @@ export default function Login() {
         setPwError(err.detail ?? 'Failed to set password')
         return
       }
-      // Password changed — complete login
       const { email: _e, ...session } = pendingSession
       login(session)
       nav('/dashboard')
     } catch { setPwError('Network error') } finally { setPwLoading(false) }
+  }
+
+  // ── Forgot password — step 1: request code ──────────────────────────────
+
+  const handleForgotRequest = async (e) => {
+    e.preventDefault(); setForgotError(''); setForgotLoading(true)
+    try {
+      const res = await fetch(`${API}/auth/forgot-password`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: forgotEmail }),
+      })
+      // Always advance to reset step — API returns 200 regardless of existence
+      if (res.ok || res.status === 200) {
+        setForgotStep('reset')
+      } else {
+        const data = await res.json().catch(() => ({}))
+        setForgotError(data.detail ?? 'Something went wrong. Please try again.')
+      }
+    } catch { setForgotError('Network error') } finally { setForgotLoading(false) }
+  }
+
+  // ── Forgot password — step 2: submit code + new password ──────────────
+
+  const handleResetConfirm = async (e) => {
+    e.preventDefault(); setForgotError('')
+    if (resetPw !== resetPwConf) { setForgotError('Passwords do not match'); return }
+    if (resetPw.length < 8) { setForgotError('Password must be at least 8 characters'); return }
+    if (!/[A-Z]/.test(resetPw)) { setForgotError('Must contain at least one uppercase letter'); return }
+    if (!/[a-z]/.test(resetPw)) { setForgotError('Must contain at least one lowercase letter'); return }
+    if (!/[0-9]/.test(resetPw)) { setForgotError('Must contain at least one number'); return }
+    if (!/[^A-Za-z0-9]/.test(resetPw)) { setForgotError('Must contain at least one symbol (!@#$…)'); return }
+    if (!resetCode.trim()) { setForgotError('Please enter the verification code from your email'); return }
+
+    setForgotLoading(true)
+    try {
+      const res = await fetch(`${API}/auth/reset-password`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email:        forgotEmail,
+          code:         resetCode.trim(),
+          new_password: resetPw,
+        }),
+      })
+      if (res.ok) {
+        setForgotStep('done')
+      } else {
+        const data = await res.json().catch(() => ({}))
+        setForgotError(data.detail ?? 'Reset failed. Check your code and try again.')
+      }
+    } catch { setForgotError('Network error') } finally { setForgotLoading(false) }
   }
 
   // ── Styles ───────────────────────────────────────────────────────────────
@@ -176,7 +237,127 @@ export default function Login() {
     </button>
   )
 
-  // ── Render: change-password step ─────────────────────────────────────────
+  const linkBtn = (label, onClick) => (
+    <button type="button" onClick={onClick}
+      style={{ background: 'none', border: 'none', color: 'var(--primary)', fontSize: 13, cursor: 'pointer', padding: 0, textDecoration: 'underline' }}>
+      {label}
+    </button>
+  )
+
+  // ── Render: forgot-password — step 1 (email entry) ─────────────────────
+
+  if (forgotStep === 'forgot') return (
+    <div style={box}>
+      <div style={card}>
+        <h1 style={{ fontSize: 21, fontWeight: 700, marginBottom: 5 }}>Reset your password</h1>
+        <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 18 }}>
+          Enter your account email and we’ll send a verification code.
+        </p>
+        {errBox(forgotError)}
+        <form onSubmit={handleForgotRequest}>
+          <div className="fg">
+            <label>Email</label>
+            <input type="email" value={forgotEmail} autoFocus required
+              onChange={e => setForgotEmail(e.target.value)} />
+          </div>
+          <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center', marginTop: 4 }}
+            disabled={forgotLoading}>
+            {forgotLoading ? 'Sending…' : 'Send Reset Code'}
+          </button>
+        </form>
+        <div style={{ marginTop: 14, textAlign: 'center' }}>
+          {linkBtn('← Back to sign in', () => { setForgotStep(null); setForgotError('') })}
+        </div>
+      </div>
+    </div>
+  )
+
+  // ── Render: forgot-password — step 2 (code + new password) ─────────────
+
+  if (forgotStep === 'reset') {
+    const strength = passwordStrength(resetPw)
+    return (
+      <div style={box}>
+        <div style={card}>
+          <h1 style={{ fontSize: 21, fontWeight: 700, marginBottom: 5 }}>Enter your new password</h1>
+          <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 18 }}>
+            Check your email for a verification code, then set your new password below.
+          </p>
+          {errBox(forgotError)}
+          <form onSubmit={handleResetConfirm}>
+            <div className="fg">
+              <label>Verification code</label>
+              <input type="text" inputMode="numeric" value={resetCode} autoFocus required
+                placeholder="6-digit code from your email"
+                onChange={e => setResetCode(e.target.value.replace(/[^0-9]/g, ''))} />
+            </div>
+            <div className="fg">
+              <label>New password</label>
+              <div style={{ position: 'relative' }}>
+                <input type={showResetPw ? 'text' : 'password'} value={resetPw} required
+                  onChange={e => setResetPw(e.target.value)} style={{ paddingRight: 52 }} />
+                {pwIcon(showResetPw, () => setShowResetPw(s => !s))}
+              </div>
+              {strength && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
+                  <div style={{ flex: 1, height: 4, borderRadius: 2, background: 'var(--border)', overflow: 'hidden' }}>
+                    <div style={{
+                      height: '100%', borderRadius: 2, background: strength.color,
+                      width: strength.label === 'Weak' ? '25%' : strength.label === 'Fair' ? '50%' : strength.label === 'Good' ? '75%' : '100%',
+                      transition: 'width .3s',
+                    }} />
+                  </div>
+                  <span style={{ fontSize: 11, color: strength.color, fontWeight: 600, minWidth: 42 }}>{strength.label}</span>
+                </div>
+              )}
+            </div>
+            <div className="fg">
+              <label>Confirm new password</label>
+              <div style={{ position: 'relative' }}>
+                <input type={showResetConf ? 'text' : 'password'} value={resetPwConf} required
+                  onChange={e => setResetPwConf(e.target.value)} style={{ paddingRight: 52 }} />
+                {pwIcon(showResetConf, () => setShowResetConf(s => !s))}
+              </div>
+              {resetPwConf && resetPw !== resetPwConf && (
+                <span style={{ fontSize: 11, color: 'var(--danger)', marginTop: 3 }}>Passwords do not match</span>
+              )}
+            </div>
+            <p style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 14, lineHeight: 1.5 }}>
+              Min 8 characters · uppercase · lowercase · number · symbol (!@#$…)
+            </p>
+            <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
+              disabled={forgotLoading || !resetPw || resetPw !== resetPwConf || !resetCode}>
+              {forgotLoading ? 'Resetting…' : 'Reset Password'}
+            </button>
+          </form>
+          <div style={{ marginTop: 14, display: 'flex', justifyContent: 'space-between' }}>
+            {linkBtn('Resend code', () => { setForgotStep('forgot'); setForgotError('') })}
+            {linkBtn('← Back to sign in', () => { setForgotStep(null); setForgotError('') })}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // ── Render: forgot-password — success ──────────────────────────────────
+
+  if (forgotStep === 'done') return (
+    <div style={box}>
+      <div style={{ ...card, textAlign: 'center' }}>
+        <div style={{ fontSize: 40, marginBottom: 12 }}>✅</div>
+        <h1 style={{ fontSize: 21, fontWeight: 700, marginBottom: 8 }}>Password reset!</h1>
+        <p style={{ fontSize: 14, color: 'var(--muted)', marginBottom: 24 }}>
+          Your password has been updated. Sign in with your new password.
+        </p>
+        <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
+          onClick={() => { setForgotStep(null); setForgotError(''); setEmail(forgotEmail); setPassword('') }}>
+          Go to Sign In
+        </button>
+      </div>
+    </div>
+  )
+
+  // ── Render: change-password step (first login) ──────────────────────────
 
   if (pendingSession) {
     const strength = passwordStrength(newPw)
@@ -236,7 +417,7 @@ export default function Login() {
     )
   }
 
-  // ── Render: MFA step ─────────────────────────────────────────────────────
+  // ── Render: MFA step ──────────────────────────────────────────────────────
 
   if (mfa) return (
     <div style={box}>
@@ -262,7 +443,7 @@ export default function Login() {
     </div>
   )
 
-  // ── Render: sign-in ───────────────────────────────────────────────────────
+  // ── Render: sign-in ────────────────────────────────────────────────────────
 
   return (
     <div style={box}>
@@ -277,7 +458,14 @@ export default function Login() {
           <div className="fg"><label>Password</label>
             <input type="password" value={password} onChange={e => setPassword(e.target.value)} required />
           </div>
-          <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center', marginTop: 6 }} disabled={loading}>
+          <div style={{ textAlign: 'right', marginTop: -8, marginBottom: 14 }}>
+            {linkBtn('Forgot password?', () => {
+              setForgotEmail(email)
+              setForgotError('')
+              setForgotStep('forgot')
+            })}
+          </div>
+          <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }} disabled={loading}>
             {loading ? 'Signing in…' : 'Sign In'}
           </button>
         </form>
