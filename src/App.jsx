@@ -11,6 +11,7 @@ import Customers from './pages/Customers'
 import WorkOrders from './pages/WorkOrders'
 import WorkOrderDetail from './pages/WorkOrderDetail'
 import Settings from './pages/Settings'
+import ClientPortalSettings from './pages/ClientPortalSettings'
 import { injectTheme, getCachedThemeCss, loadTenantTheme } from './utils/brandingTheme'
 
 // ── JWT decode helper ────────────────────────────────────────────────────────────
@@ -106,13 +107,14 @@ export default function App() {
             <Routes>
               <Route path="/login" element={<Login />} />
               <Route element={<ProtectedLayout />}>
-                <Route path="/"                element={<Navigate to="/dashboard" replace />} />
-                <Route path="/dashboard"       element={<Dashboard />} />
-                <Route path="/staff"           element={<Staff />} />
-                <Route path="/customers"       element={<Customers />} />
-                <Route path="/workorders"      element={<WorkOrders />} />
-                <Route path="/workorders/:id"  element={<WorkOrderDetail />} />
-                <Route path="/settings"        element={<Settings />} />
+                <Route path="/"                         element={<Navigate to="/dashboard" replace />} />
+                <Route path="/dashboard"                element={<Dashboard />} />
+                <Route path="/staff"                    element={<Staff />} />
+                <Route path="/customers"                element={<Customers />} />
+                <Route path="/workorders"               element={<WorkOrders />} />
+                <Route path="/workorders/:id"           element={<WorkOrderDetail />} />
+                <Route path="/settings"                 element={<Settings />} />
+                <Route path="/client-portal-settings"   element={<ClientPortalSettings />} />
               </Route>
               <Route path="*" element={<Navigate to="/dashboard" replace />} />
             </Routes>
