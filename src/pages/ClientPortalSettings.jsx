@@ -14,7 +14,7 @@ export default function ClientPortalSettings() {
   const [loading, setLoading]   = useState(true)
   const [saving,  setSaving]    = useState(false)
 
-  const portalUrl = `https://portal.${tenantId}.dmsystemsinc.net`
+  const portalUrl = `https://${tenantId}.portal.dmsystemsinc.net`
 
   // Pull current config from the public branding endpoint.
   // This is the same endpoint the client-portal SPA uses pre-login, so it
