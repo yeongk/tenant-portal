@@ -45,6 +45,7 @@ export default function Login() {
   // auth state
   const [email,    setEmail]    = useState('')
   const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
   const [totp,     setTotp]     = useState('')
   const [mfa,      setMfa]      = useState(null)   // {session, email}
   const [error,    setError]    = useState('')
@@ -456,7 +457,11 @@ export default function Login() {
             <input type="email" value={email} onChange={e => setEmail(e.target.value)} required />
           </div>
           <div className="fg"><label>Password</label>
-            <input type="password" value={password} onChange={e => setPassword(e.target.value)} required />
+            <div style={{ position: 'relative' }}>
+              <input type={showPassword ? 'text' : 'password'} value={password}
+                onChange={e => setPassword(e.target.value)} style={{ paddingRight: 52 }} required />
+              {pwIcon(showPassword, () => setShowPassword(s => !s))}
+            </div>
           </div>
           <div style={{ textAlign: 'right', marginTop: -8, marginBottom: 14 }}>
             {linkBtn('Forgot password?', () => {
