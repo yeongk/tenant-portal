@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { useApi } from '../hooks/useApi'
 import { useToast } from '../context/ToastContext'
+import { useAuth } from '../context/AuthContext'
 import {
   YEAR_OPTIONS,
   ENGINE_OPTIONS,
@@ -118,6 +119,43 @@ function VRow({ v, i, onChange, onRemove }) {
   )
 }
 
+// ── Vehicle detail modal — read-only, opened via the hover "View" link ─────────
+function VehicleDetailModal({ vehicle, onClose }) {
+  const rows = [
+    ['Nickname', vehicle.nickname],
+    ['Year', vehicle.year],
+    ['Make', vehicle.make],
+    ['Model', vehicle.model],
+    ['Engine', vehicle.engine],
+    ['License Plate', vehicle.plate],
+    ['VIN', vehicle.vin],
+  ]
+  return (
+    <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal" style={{ maxWidth: 420 }}>
+        <div className="modal-hd">
+          <h2>Vehicle Detail</h2>
+          <button className="modal-close" onClick={onClose}>×</button>
+        </div>
+        <div style={{ fontSize: 13, lineHeight: 2 }}>
+          {rows.map(([label, val]) => (
+            <div key={label} style={{
+              display: 'flex', justifyContent: 'space-between',
+              borderBottom: '1px solid var(--border)', padding: '4px 0',
+            }}>
+              <span style={{ color: 'var(--muted)' }}>{label}</span>
+              <span style={{ fontWeight: 500 }}>{val || '—'}</span>
+            </div>
+          ))}
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+          <button className="btn btn-primary" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Add Customer modal ─────────────────────────────────────────────────────────
 function Modal({ onClose, onDone }) {
   const { post } = useApi()
@@ -207,11 +245,19 @@ function Modal({ onClose, onDone }) {
 
 // ── Page ───────────────────────────────────────────────────────────────────────
 export default function Customers() {
-  const { get } = useApi()
+  const { get, patch } = useApi()
   const toast = useToast()
+  const { cogGroup } = useAuth()
+  const canManage = cogGroup === 'SHOP_ADMIN' || cogGroup === 'SUPERVISOR'
   const [customers, setC] = useState([])
   const [loading, setL] = useState(true)
   const [modal, setModal] = useState(false)
+  const [viewVehicle, setViewVehicle] = useState(null)
+
+  // Row-level edit — vehicles only. SHOP_ADMIN/SUPERVISOR only (server-enforced too).
+  const [editingId, setEditingId] = useState(null)
+  const [editVehicles, setEditVehicles] = useState([])
+  const [saving, setSaving] = useState(false)
 
   const load = () => {
     setL(true)
@@ -223,12 +269,36 @@ export default function Customers() {
 
   useEffect(load, [])
 
+  const startEdit = (c) => {
+    setEditingId(c.customer_id)
+    setEditVehicles((c.vehicles ?? []).map(v => ({ ...v })))
+  }
+  const cancelEdit = () => { setEditingId(null); setEditVehicles([]) }
+  const upV = (i, val) => setEditVehicles(vs => vs.map((x, j) => j === i ? val : x))
+  const rmV = (i)      => setEditVehicles(vs => vs.filter((_, j) => j !== i))
+  const saveEdit = async (id) => {
+    setSaving(true)
+    try {
+      const payload = editVehicles.map(({ makeId, ...rest }) => rest)
+      await patch(`/customers/${id}`, { vehicles: payload })
+      toast('Customer updated')
+      setEditingId(null)
+      load()
+    } catch (err) {
+      toast(err.message, 'error')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return (
     <div>
       {modal && <Modal onClose={() => setModal(false)} onDone={() => { setModal(false); load() }} />}
+      {viewVehicle && <VehicleDetailModal vehicle={viewVehicle} onClose={() => setViewVehicle(null)} />}
+
       <div className="ph">
         <h1>Customers</h1>
-        <button className="btn btn-primary" onClick={() => setModal(true)}>+ Add Customer</button>
+        {canManage && <button className="btn btn-primary" onClick={() => setModal(true)}>+ Add Customer</button>}
       </div>
       <div className="card">
         {loading ? <div className="spinner" /> : customers.length === 0 ? (
@@ -236,22 +306,65 @@ export default function Customers() {
         ) : (
           <table>
             <thead>
-              <tr><th>Name</th><th>Email</th><th>Phone</th><th>Vehicles</th></tr>
+              <tr>
+                <th>Name</th><th>Email</th><th>Phone</th><th>Vehicles</th>
+                {canManage && <th></th>}
+              </tr>
             </thead>
             <tbody>
-              {customers.map(c => (
-                <tr key={c.customer_id}>
-                  <td style={{ fontWeight: 500 }}>{c.full_name}</td>
-                  <td>{c.email}</td>
-                  <td>{c.phone || '—'}</td>
-                  <td style={{ color: 'var(--muted)', fontSize: 13 }}>
-                    {(c.vehicles ?? [])
-                      .map(v => `${v.year || ''} ${v.make || ''} ${v.model || ''}`.trim())
-                      .filter(Boolean)
-                      .join(', ') || '—'}
-                  </td>
-                </tr>
-              ))}
+              {customers.map(c => {
+                const editing = editingId === c.customer_id
+                return (
+                  <React.Fragment key={c.customer_id}>
+                    <tr>
+                      <td style={{ fontWeight: 500 }}>{c.full_name}</td>
+                      <td>{c.email}</td>
+                      <td>{c.phone || '—'}</td>
+                      <td className="vehicle-cell" style={{ color: 'var(--muted)', fontSize: 13 }}>
+                        {editing ? (
+                          <span>editing below…</span>
+                        ) : (c.vehicles ?? []).length === 0 ? '—' : (
+                          (c.vehicles ?? []).map((v, i) => (
+                            <div key={v.vehicle_id ?? i} className="vehicle-row-hover">
+                              <span>{`${v.year || ''} ${v.make || ''} ${v.model || ''}`.trim() || 'Vehicle'}</span>
+                              <a className="vehicle-view-link" onClick={() => setViewVehicle(v)}>View</a>
+                            </div>
+                          ))
+                        )}
+                      </td>
+                      {canManage && (
+                        <td>
+                          {!editing && (
+                            <button className="btn btn-secondary btn-sm" onClick={() => startEdit(c)}>Edit</button>
+                          )}
+                        </td>
+                      )}
+                    </tr>
+                    {editing && (
+                      <tr>
+                        <td colSpan={canManage ? 5 : 4} style={{ background: 'var(--bg)' }}>
+                          <div style={{ fontWeight: 500, fontSize: 13, marginBottom: 8 }}>Edit Vehicles</div>
+                          {editVehicles.map((v, i) => (
+                            <VRow key={i} v={v} i={i} onChange={upV} onRemove={rmV} />
+                          ))}
+                          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 4 }}>
+                            <button type="button" className="btn btn-secondary btn-sm"
+                              onClick={() => setEditVehicles(vs => [...vs, emptyV()])}>
+                              + Add Vehicle
+                            </button>
+                            <div style={{ flex: 1 }} />
+                            <button className="btn btn-secondary btn-sm" onClick={cancelEdit}>Cancel</button>
+                            <button className="btn btn-primary btn-sm" disabled={saving}
+                              onClick={() => saveEdit(c.customer_id)}>
+                              {saving ? 'Saving…' : 'Save'}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                )
+              })}
             </tbody>
           </table>
         )}
