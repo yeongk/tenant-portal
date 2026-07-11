@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { useApi } from '../hooks/useApi'
 import { useToast } from '../context/ToastContext'
+import { useAuth } from '../context/AuthContext'
 
 const ROLES     = ['SHOP_ADMIN', 'SUPERVISOR', 'MECHANIC']
 const ROLE_BADGE = { SHOP_ADMIN: 'badge-purple', SUPERVISOR: 'badge-blue', MECHANIC: 'badge-gray' }
@@ -140,8 +141,10 @@ function AddStaffModal({ onClose, onCreated }) {
 // ── Staff page ────────────────────────────────────────────────────────────────
 
 export default function Staff() {
-  const { get, del } = useApi()
+  const { get, del, patch } = useApi()
   const toast        = useToast()
+  const { cogGroup }  = useAuth()
+  const isShopAdmin   = cogGroup === 'SHOP_ADMIN'
   const [staff,      setStaff]   = useState([])
   const [loading,    setLoading] = useState(true)
   const [roleFilter, setRole]    = useState('')
@@ -149,6 +152,11 @@ export default function Staff() {
   // newStaff holds the freshly-created staff item (with temp_password) to show
   // the credentials dialog. Cleared when the admin dismisses the dialog.
   const [newStaff,   setNewStaff] = useState(null)
+
+  // Row-level edit — specialty only. SHOP_ADMIN only (enforced server-side too).
+  const [editingId,     setEditingId]     = useState(null)
+  const [editSpecialty, setEditSpecialty] = useState('')
+  const [saving,        setSaving]        = useState(false)
 
   const load = () => {
     setLoading(true)
@@ -174,6 +182,28 @@ export default function Staff() {
     catch (e) { toast(e.message, 'error') }
   }
 
+  const startEdit = (s) => {
+    setEditingId(s.staff_id)
+    setEditSpecialty(s.specialty || '')
+  }
+  const cancelEdit = () => {
+    setEditingId(null)
+    setEditSpecialty('')
+  }
+  const saveEdit = async (id) => {
+    setSaving(true)
+    try {
+      await patch(`/staff/${id}`, { specialty: editSpecialty })
+      toast('Staff updated')
+      setEditingId(null)
+      load()
+    } catch (e) {
+      toast(e.message, 'error')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return (
     <div>
       {/* Add staff modal */}
@@ -194,7 +224,9 @@ export default function Staff() {
 
       <div className="ph">
         <h1>Staff</h1>
-        <button className="btn btn-primary" onClick={() => setShowAdd(true)}>+ Add Staff</button>
+        {isShopAdmin && (
+          <button className="btn btn-primary" onClick={() => setShowAdd(true)}>+ Add Staff</button>
+        )}
       </div>
 
       <div className="fbar">
@@ -210,23 +242,57 @@ export default function Staff() {
         ) : (
           <table>
             <thead>
-              <tr><th>Name</th><th>Role</th><th>Email</th><th>Specialty</th><th></th></tr>
+              <tr>
+                <th>Name</th><th>Role</th><th>Email</th><th>Specialty</th>
+                {isShopAdmin && <th></th>}
+              </tr>
             </thead>
             <tbody>
-              {visible.map(s => (
-                <tr key={s.staff_id}>
-                  <td style={{ fontWeight: 500 }}>{s.full_name}</td>
-                  <td><span className={`badge ${ROLE_BADGE[s.role] ?? 'badge-gray'}`}>{s.role}</span></td>
-                  <td>{s.email}</td>
-                  <td style={{ color: 'var(--muted)' }}>{s.specialty || '—'}</td>
-                  <td>
-                    <button className="btn btn-secondary btn-sm"
-                      onClick={() => handleRemove(s.staff_id)}>
-                      Remove
-                    </button>
-                  </td>
-                </tr>
-              ))}
+              {visible.map(s => {
+                const editing = editingId === s.staff_id
+                return (
+                  <tr key={s.staff_id}>
+                    <td style={{ fontWeight: 500 }}>{s.full_name}</td>
+                    <td><span className={`badge ${ROLE_BADGE[s.role] ?? 'badge-gray'}`}>{s.role}</span></td>
+                    <td>{s.email}</td>
+                    <td style={{ color: 'var(--muted)' }}>
+                      {editing ? (
+                        <input
+                          value={editSpecialty}
+                          onChange={e => setEditSpecialty(e.target.value)}
+                          placeholder="e.g. Engine rebuild, Paint"
+                          style={{ padding: '4px 8px', fontSize: 13 }}
+                        />
+                      ) : (s.specialty || '—')}
+                    </td>
+                    {isShopAdmin && (
+                      <td>
+                        {editing ? (
+                          <div style={{ display: 'flex', gap: 6 }}>
+                            <button className="btn btn-primary btn-sm" disabled={saving}
+                              onClick={() => saveEdit(s.staff_id)}>
+                              {saving ? 'Saving…' : 'Save'}
+                            </button>
+                            <button className="btn btn-secondary btn-sm" onClick={cancelEdit}>
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <div style={{ display: 'flex', gap: 6 }}>
+                            <button className="btn btn-secondary btn-sm" onClick={() => startEdit(s)}>
+                              Edit
+                            </button>
+                            <button className="btn btn-secondary btn-sm"
+                              onClick={() => handleRemove(s.staff_id)}>
+                              Remove
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                    )}
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         )}
