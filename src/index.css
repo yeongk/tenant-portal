@@ -34,6 +34,12 @@ td{padding:10px 14px;border-bottom:1px solid var(--border);vertical-align:middle
 tr:last-child td{border-bottom:none}
 tr.clickable:hover td{background:#fafaf8;cursor:pointer}
 
+/* Vehicle hover-to-view link (Customers page) */
+.vehicle-cell{position:relative}
+.vehicle-row-hover{display:flex;align-items:center;gap:6px;padding:2px 0}
+.vehicle-view-link{display:none;color:var(--accent);font-size:12px;font-weight:600;cursor:pointer}
+.vehicle-row-hover:hover .vehicle-view-link{display:inline}
+
 /* Form */
 .fg{display:flex;flex-direction:column;gap:5px;margin-bottom:14px}
 .fg label{font-size:13px;font-weight:500}
