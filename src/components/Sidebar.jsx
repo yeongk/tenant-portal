@@ -11,6 +11,7 @@ const NAV = [
 ]
 
 const ADMIN_NAV = [
+  { to: '/roles',                  label: 'Roles' },
   { to: '/client-portal-settings', label: 'Client Portal' },
 ]
 

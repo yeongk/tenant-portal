@@ -1,0 +1,40 @@
+{
+    "_comment": [
+        "Role table — tenant-scoped business roles (e.g. supervisor, mechanic,",
+        "master engine builder, advisor). Distinct from Cognito group — Cognito",
+        "groups are limited to SHOP_ADMIN / MECHANIC / CLIENT; every MECHANIC",
+        "staff member is additionally assigned a business role from this table",
+        "via Staff.role_id. See app/service/models.py in fastapi-sam for the",
+        "full rationale.",
+        "",
+        "Key pattern:",
+        "  PK = TENANT#<tenantId>   SK = ROLE#<roleId>",
+        "",
+        "No GSIs — roles are always listed/read within a single tenant via the",
+        "main-table PK prefix: PK = TENANT#x AND begins_with(SK, 'ROLE#')"
+    ],
+    "Table": {
+        "AttributeDefinitions": [
+            {
+                "AttributeName": "PK",
+                "AttributeType": "S"
+            },
+            {
+                "AttributeName": "SK",
+                "AttributeType": "S"
+            }
+        ],
+        "TableName": "Role",
+        "KeySchema": [
+            {
+                "AttributeName": "PK",
+                "KeyType": "HASH"
+            },
+            {
+                "AttributeName": "SK",
+                "KeyType": "RANGE"
+            }
+        ],
+        "BillingMode": "PAY_PER_REQUEST"
+    }
+}

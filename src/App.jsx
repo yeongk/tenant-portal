@@ -7,6 +7,7 @@ import ProtectedLayout from './layouts/ProtectedLayout'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import Staff from './pages/Staff'
+import Roles from './pages/Roles'
 import Customers from './pages/Customers'
 import WorkOrders from './pages/WorkOrders'
 import WorkOrderDetail from './pages/WorkOrderDetail'
@@ -110,6 +111,7 @@ export default function App() {
                 <Route path="/"                         element={<Navigate to="/dashboard" replace />} />
                 <Route path="/dashboard"                element={<Dashboard />} />
                 <Route path="/staff"                    element={<Staff />} />
+                <Route path="/roles"                    element={<Roles />} />
                 <Route path="/customers"                element={<Customers />} />
                 <Route path="/workorders"               element={<WorkOrders />} />
                 <Route path="/workorders/:id"           element={<WorkOrderDetail />} />

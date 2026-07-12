@@ -3,8 +3,12 @@ import { useApi } from '../hooks/useApi'
 import { useToast } from '../context/ToastContext'
 import { useAuth } from '../context/AuthContext'
 
-const ROLES     = ['SHOP_ADMIN', 'SUPERVISOR', 'MECHANIC']
-const ROLE_BADGE = { SHOP_ADMIN: 'badge-purple', SUPERVISOR: 'badge-blue', MECHANIC: 'badge-gray' }
+// Role is a separate construct from Cognito group. Every staff account
+// created on this page is added to the single MECHANIC Cognito group (the
+// only group used for internal workforce) — the business role below
+// (supervisor, mechanic, master engine builder, advisor, etc.) is sourced
+// from the tenant's Role table (see the Roles page) and tracked via
+// staff.role_id, independent of Cognito access.
 
 // ── Credentials dialog ────────────────────────────────────────────────────────
 // Shown immediately after a staff member is created.
@@ -36,7 +40,8 @@ function CredentialsDialog({ staff, onClose }) {
           borderRadius: 'var(--radius)', padding: '12px 14px', marginBottom: 18,
         }}>
           <strong style={{ fontSize: 13 }}>
-            ✓ {staff.full_name} has been added as {staff.role}
+            ✓ {staff.full_name} has been added
+            {staff.role_name ? ` as ${staff.role_name}` : ''}
           </strong>
           <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>
             Share the credentials below with the new staff member. This password
@@ -79,10 +84,10 @@ function CredentialsDialog({ staff, onClose }) {
 
 // ── Add Staff modal ───────────────────────────────────────────────────────────
 
-function AddStaffModal({ onClose, onCreated }) {
+function AddStaffModal({ roles, onClose, onCreated }) {
   const { post } = useApi()
   const toast    = useToast()
-  const [f, setF]       = useState({ full_name: '', email: '', role: 'MECHANIC', specialty: '', phone: '' })
+  const [f, setF]       = useState({ full_name: '', email: '', role_id: '', specialty: '', phone: '' })
   const [loading, setL] = useState(false)
   const set = (k, v) => setF(x => ({ ...x, [k]: v }))
 
@@ -90,7 +95,7 @@ function AddStaffModal({ onClose, onCreated }) {
     e.preventDefault()
     setL(true)
     try {
-      const created = await post('/staff', f)
+      const created = await post('/staff', { ...f, role_id: f.role_id || null })
       // Pass the full response (including temp_password) up to the parent
       onCreated(created)
     } catch (err) {
@@ -115,8 +120,9 @@ function AddStaffModal({ onClose, onCreated }) {
             <input type="email" value={f.email} onChange={e => set('email', e.target.value)} required />
           </div>
           <div className="fg"><label>Role</label>
-            <select value={f.role} onChange={e => set('role', e.target.value)}>
-              {ROLES.map(r => <option key={r}>{r}</option>)}
+            <select value={f.role_id} onChange={e => set('role_id', e.target.value)}>
+              <option value="">No role assigned</option>
+              {roles.map(r => <option key={r.role_id} value={r.role_id}>{r.name}</option>)}
             </select>
           </div>
           <div className="fg"><label>Specialty</label>
@@ -146,16 +152,18 @@ export default function Staff() {
   const { cogGroup }  = useAuth()
   const isShopAdmin   = cogGroup === 'SHOP_ADMIN'
   const [staff,      setStaff]   = useState([])
+  const [roles,      setRoles]   = useState([])
   const [loading,    setLoading] = useState(true)
-  const [roleFilter, setRole]    = useState('')
+  const [roleFilter, setRoleFilter] = useState('')
   const [showAdd,    setShowAdd] = useState(false)
   // newStaff holds the freshly-created staff item (with temp_password) to show
   // the credentials dialog. Cleared when the admin dismisses the dialog.
   const [newStaff,   setNewStaff] = useState(null)
 
-  // Row-level edit — specialty only. SHOP_ADMIN only (enforced server-side too).
+  // Row-level edit — specialty and role_id. SHOP_ADMIN only (enforced server-side too).
   const [editingId,     setEditingId]     = useState(null)
   const [editSpecialty, setEditSpecialty] = useState('')
+  const [editRoleId,    setEditRoleId]    = useState('')
   const [saving,        setSaving]        = useState(false)
 
   const load = () => {
@@ -166,9 +174,16 @@ export default function Staff() {
       .finally(() => setLoading(false))
   }
 
-  useEffect(load, [])
+  const loadRoles = () => {
+    get('/roles')
+      .then(d => setRoles(d.items ?? []))
+      .catch(e => toast(e.message, 'error'))
+  }
 
-  const visible = roleFilter ? staff.filter(s => s.role === roleFilter) : staff
+  useEffect(load, [])
+  useEffect(loadRoles, [])
+
+  const visible = roleFilter ? staff.filter(s => s.role_id === roleFilter) : staff
 
   const handleCreated = (created) => {
     setShowAdd(false)
@@ -185,15 +200,17 @@ export default function Staff() {
   const startEdit = (s) => {
     setEditingId(s.staff_id)
     setEditSpecialty(s.specialty || '')
+    setEditRoleId(s.role_id || '')
   }
   const cancelEdit = () => {
     setEditingId(null)
     setEditSpecialty('')
+    setEditRoleId('')
   }
   const saveEdit = async (id) => {
     setSaving(true)
     try {
-      await patch(`/staff/${id}`, { specialty: editSpecialty })
+      await patch(`/staff/${id}`, { specialty: editSpecialty, role_id: editRoleId })
       toast('Staff updated')
       setEditingId(null)
       load()
@@ -209,6 +226,7 @@ export default function Staff() {
       {/* Add staff modal */}
       {showAdd && (
         <AddStaffModal
+          roles={roles}
           onClose={() => setShowAdd(false)}
           onCreated={handleCreated}
         />
@@ -230,9 +248,9 @@ export default function Staff() {
       </div>
 
       <div className="fbar">
-        <select value={roleFilter} onChange={e => setRole(e.target.value)}>
+        <select value={roleFilter} onChange={e => setRoleFilter(e.target.value)}>
           <option value="">All roles</option>
-          {ROLES.map(r => <option key={r}>{r}</option>)}
+          {roles.map(r => <option key={r.role_id} value={r.role_id}>{r.name}</option>)}
         </select>
       </div>
 
@@ -253,7 +271,22 @@ export default function Staff() {
                 return (
                   <tr key={s.staff_id}>
                     <td style={{ fontWeight: 500 }}>{s.full_name}</td>
-                    <td><span className={`badge ${ROLE_BADGE[s.role] ?? 'badge-gray'}`}>{s.role}</span></td>
+                    <td>
+                      {editing ? (
+                        <select
+                          value={editRoleId}
+                          onChange={e => setEditRoleId(e.target.value)}
+                          style={{ padding: '4px 8px', fontSize: 13 }}
+                        >
+                          <option value="">No role assigned</option>
+                          {roles.map(r => <option key={r.role_id} value={r.role_id}>{r.name}</option>)}
+                        </select>
+                      ) : (
+                        s.role_name
+                          ? <span className="badge badge-gray">{s.role_name}</span>
+                          : <span style={{ color: 'var(--muted)' }}>—</span>
+                      )}
+                    </td>
                     <td>{s.email}</td>
                     <td style={{ color: 'var(--muted)' }}>
                       {editing ? (

@@ -14,6 +14,7 @@ CLI commands below to create or recreate tables.
 |---|---|---|
 | `Tenant.json` | Tenant | One record per registered shop (tenant admin profile) |
 | `Staff.json` | Staff | Shop employees scoped per tenant |
+| `Role.json` | Role | Tenant-scoped business roles (supervisor, mechanic, master engine builder, advisor, etc.) assigned to staff |
 | `Customer.json` | Customer | End-user car owners scoped per tenant |
 | `WorkOrder.json` | WorkOrder | Jobs linking customers to work, scoped per tenant |
 | `StaffWorkOrder.json` | StaffWorkOrder | Junction table: staff ↔ work order many-to-many |
@@ -24,6 +25,8 @@ CLI commands below to create or recreate tables.
 
 ```
 Tenant   ──1:many──►  Staff
+Tenant   ──1:many──►  Role
+Staff    ──many:1──►  Role        (via Staff.role_id)
 Staff    ──many:many─  WorkOrder   (via StaffWorkOrder junction table)
 Customer ──1:many──►  WorkOrder
 ```
@@ -33,6 +36,19 @@ Customer ──1:many──►  WorkOrder
 - Query all staff for a tenant (preferred): main table `PK = TENANT#x AND begins_with(SK, "STAFF#")`
 - Query all staff for a tenant (cross-tenant/admin): `Staff.GSI-StaffByTenant` with `PK = TenantId`
 - Reverse lookup by Cognito sub: `Staff.GSI-StaffByUser` with `PK = UserId`
+
+### Staff → Role (many-to-1)
+Role is a separate construct from Cognito group. Cognito groups are limited to
+SHOP_ADMIN (shop owner), MECHANIC (shop staff resource — all internal
+workforce), and CLIENT (end customer). Within MECHANIC, each staff member is
+assigned a business role (title, description, billing rate) from the Role
+table:
+- Role `PK = TENANT#<tenantId>`, `SK = ROLE#<roleId>`
+- Staff item carries a `role_id` attribute pointing at the Role item
+- All roles for a tenant: main table `PK = TENANT#x AND begins_with(SK, "ROLE#")`
+- Resolving a staff row's role name: direct `GetItem` on `PK = TENANT#x, SK = ROLE#<roleId>`
+- No GSI — deleting a Role leaves a dangling `role_id` on any Staff rows that
+  referenced it; the API resolves that to no role name rather than erroring
 
 ### Staff ↔ WorkOrder (many-to-many)
 All staff are equal participants — no lead mechanic. Resolved via `StaffWorkOrder`:
@@ -85,6 +101,23 @@ aws dynamodb create-table \
   ]'
 
 aws dynamodb wait table-exists --table-name Staff --region us-east-1
+```
+
+### Role (new — business roles, separate from Cognito group)
+
+```bash
+aws dynamodb create-table \
+  --table-name Role \
+  --region us-east-1 \
+  --billing-mode PAY_PER_REQUEST \
+  --attribute-definitions \
+      AttributeName=PK,AttributeType=S \
+      AttributeName=SK,AttributeType=S \
+  --key-schema \
+      AttributeName=PK,KeyType=HASH \
+      AttributeName=SK,KeyType=RANGE
+
+aws dynamodb wait table-exists --table-name Role --region us-east-1
 ```
 
 ### WorkOrder (recreate to drop StaffId / LeadStaffId)

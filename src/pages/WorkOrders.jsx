@@ -52,7 +52,7 @@ function CreateModal({ onClose, onCreated }) {
               {staff.map(s=>(
                 <label key={s.staff_id} style={{display:'flex',alignItems:'center',gap:8,padding:'3px 0',cursor:'pointer'}}>
                   <input type="checkbox" checked={f.staff_ids.includes(s.staff_id)} onChange={()=>togSt(s.staff_id)} style={{width:'auto'}}/>
-                  {s.full_name} <span style={{color:'var(--muted)',fontSize:12}}>({s.role})</span>
+                  {s.full_name} {s.role_name && <span style={{color:'var(--muted)',fontSize:12}}>({s.role_name})</span>}
                 </label>
               ))}
               {staff.length===0&&<span style={{fontSize:13,color:'var(--muted)'}}>No staff yet</span>}
