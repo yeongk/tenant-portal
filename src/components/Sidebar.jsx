@@ -19,6 +19,7 @@ const ADMIN_NAV = [
     children: [
       { to: '/reference/work-phases',         label: 'Work Phase' },
       { to: '/reference/labor-types',         label: 'Labor Type' },
+      { to: '/reference/labor-rates',         label: 'Labor Rates' },
       { to: '/reference/worker-designations', label: 'Worker Designation' },
     ],
   },
