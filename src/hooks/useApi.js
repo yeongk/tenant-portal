@@ -20,7 +20,13 @@ export function useApi() {
     })
     if (res.status === 401) { logout(); throw new Error('Session expired') }
     const data = await res.json().catch(() => ({}))
-    if (!res.ok) throw new Error(data.detail ?? `HTTP ${res.status}`)
+    if (!res.ok) {
+      // FastAPI validation errors (422) arrive as a list of {loc, msg}; show them readably.
+      const detail = Array.isArray(data.detail)
+        ? data.detail.map(d => d.msg ?? String(d)).join('; ')
+        : data.detail
+      throw new Error(detail ?? `HTTP ${res.status}`)
+    }
     return data
   }, [idToken, logout])
   return {

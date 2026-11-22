@@ -15,6 +15,7 @@ import Settings from './pages/Settings'
 import ClientPortalSettings from './pages/ClientPortalSettings'
 import ReferenceData from './pages/ReferenceData'
 import LaborRates from './pages/LaborRates'
+import PartsCatalog from './pages/PartsCatalog'
 import { injectTheme, getCachedThemeCss, loadTenantTheme } from './utils/brandingTheme'
 
 // ── JWT decode helper ────────────────────────────────────────────────────────────
@@ -123,6 +124,7 @@ export default function App() {
                 <Route path="/reference/work-phases"         element={<ReferenceData kind="work-phases" />} />
                 <Route path="/reference/labor-types"         element={<ReferenceData kind="labor-types" />} />
                 <Route path="/reference/labor-rates"         element={<LaborRates />} />
+                <Route path="/parts"                    element={<PartsCatalog />} />
                 <Route path="/reference/worker-designations" element={<ReferenceData kind="worker-designations" />} />
               </Route>
               <Route path="*" element={<Navigate to="/dashboard" replace />} />

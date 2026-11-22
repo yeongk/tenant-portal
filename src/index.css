@@ -50,6 +50,7 @@ tr.clickable:hover td{background:#fafaf8;cursor:pointer}
 .badge{display:inline-block;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:600}
 .badge-green{background:#e6f4dd;color:#2d6a1a}
 .badge-yellow{background:#fef3c7;color:#92400e}
+.badge-red{background:#fee2e2;color:#991b1b}
 .badge-gray{background:#f0f0ee;color:#555}
 .badge-blue{background:#dbeafe;color:#1e40af}
 .badge-purple{background:#ede9fe;color:#5b21b6}

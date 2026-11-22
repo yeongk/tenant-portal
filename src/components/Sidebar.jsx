@@ -7,6 +7,7 @@ const NAV = [
   { to: '/dashboard',  label: 'Dashboard' },
   { to: '/workorders', label: 'Work Orders' },
   { to: '/customers',  label: 'Customers' },
+  { to: '/parts',      label: 'Parts Catalog' },
   { to: '/staff',      label: 'Staff' },
   { to: '/settings',   label: 'Settings' },
 ]
