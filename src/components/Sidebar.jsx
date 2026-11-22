@@ -7,25 +7,33 @@ const NAV = [
   { to: '/dashboard',  label: 'Dashboard' },
   { to: '/workorders', label: 'Work Orders' },
   { to: '/customers',  label: 'Customers' },
-  { to: '/parts',      label: 'Parts Catalog' },
   { to: '/staff',      label: 'Staff' },
   { to: '/settings',   label: 'Settings' },
 ]
 
+// Reference Data is shown to shop admins and supervisors. Each page decides
+// what the viewer can change (admins edit everything; supervisors can add and
+// edit catalog parts; otherwise read-only), so showing the menu changes no
+// permissions.
+const REFERENCE_NAV = {
+  label: 'Reference Data',
+  base:  '/reference',
+  children: [
+    { to: '/reference/work-phases',         label: 'Work Phase' },
+    { to: '/reference/labor-types',         label: 'Labor Type' },
+    { to: '/reference/labor-rates',         label: 'Labor Rates' },
+    { to: '/reference/worker-designations', label: 'Worker Designation' },
+    { to: '/reference/parts-catalog',       label: 'Parts Catalog' },
+  ],
+}
+
 const ADMIN_NAV = [
   { to: '/roles', label: 'Roles' },
-  {
-    label: 'Reference Data',
-    base:  '/reference',
-    children: [
-      { to: '/reference/work-phases',         label: 'Work Phase' },
-      { to: '/reference/labor-types',         label: 'Labor Type' },
-      { to: '/reference/labor-rates',         label: 'Labor Rates' },
-      { to: '/reference/worker-designations', label: 'Worker Designation' },
-    ],
-  },
+  REFERENCE_NAV,
   { to: '/client-portal-settings', label: 'Client Portal' },
 ]
+
+const SUPERVISOR_NAV = [REFERENCE_NAV]
 
 const linkStyle = (indent = false) => ({ isActive }) => ({
   display: 'block', padding: indent ? '7px 18px 7px 34px' : '9px 18px',
@@ -71,8 +79,10 @@ function NavGroup({ label, base, children }) {
 }
 
 export default function Sidebar() {
-  const { isAdmin } = useAuth()
-  const links = isAdmin ? [...NAV, ...ADMIN_NAV] : NAV
+  const { isAdmin, cogGroup } = useAuth()
+  const links = isAdmin                    ? [...NAV, ...ADMIN_NAV]
+              : cogGroup === 'SUPERVISOR' ? [...NAV, ...SUPERVISOR_NAV]
+              : NAV
 
   return (
     <nav style={{

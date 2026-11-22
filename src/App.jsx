@@ -124,7 +124,9 @@ export default function App() {
                 <Route path="/reference/work-phases"         element={<ReferenceData kind="work-phases" />} />
                 <Route path="/reference/labor-types"         element={<ReferenceData kind="labor-types" />} />
                 <Route path="/reference/labor-rates"         element={<LaborRates />} />
-                <Route path="/parts"                    element={<PartsCatalog />} />
+                <Route path="/reference/parts-catalog"       element={<PartsCatalog />} />
+                {/* old address, kept so existing bookmarks still work */}
+                <Route path="/parts"                    element={<Navigate to="/reference/parts-catalog" replace />} />
                 <Route path="/reference/worker-designations" element={<ReferenceData kind="worker-designations" />} />
               </Route>
               <Route path="*" element={<Navigate to="/dashboard" replace />} />
