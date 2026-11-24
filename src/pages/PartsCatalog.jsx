@@ -9,7 +9,9 @@ import { parseCsv, toCsv, downloadText } from '../utils/csv'
 // The shop's parts master: part numbers, category, originality, vendor offers
 // and fitment. Two ways in for a new shop: "Add part" (one at a time — the
 // same form work-order screens will use for quick add) and "Import CSV" (an
-// existing parts list, previewed before anything is written). Categories and
+// existing parts list, previewed before anything is written), plus "Starter
+// set" (pick generic parts per vehicle and category from the platform starter
+// set). Categories and
 // attribute lists come from fastapi-sam reference_data.py via
 // GET /api/parts/options. Backend: app/service/part_catalog.py.
 
@@ -512,6 +514,266 @@ function PartDetailModal({ partId, opts, canEdit, canDelete, onClose, onChanged,
   )
 }
 
+// ── Starter set ───────────────────────────────────────────────────────────────
+//
+// Pick-and-choose from the platform starter set (PLATFORM#DEFAULT): choose a
+// vehicle by make, model and generation, tick the parts wanted in each
+// category, optionally type the shop's real part number, and copy. Starter
+// numbers (SS-…) are placeholders; parts copied without a real number are
+// marked "Needs review". Backend: /api/parts/starter*.
+
+const COPY_CHUNK = 200
+const years = (a, b) => (a && b ? `${a}–${b}` : a ? `${a}–` : b ? `–${b}` : '')
+const vehicleLabel = (v) => [v.variant, years(v.year_from, v.year_to) && `(${years(v.year_from, v.year_to)})`]
+  .filter(Boolean).join(' ')
+
+function StarterSetModal({ opts, onClose, onCopied }) {
+  const { get, post } = useApi()
+  const toast = useToast()
+  const [vehicles, setVehicles] = useState(null)
+  const [make, setMake] = useState('')
+  const [model, setModel] = useState('')
+  const [family, setFamily] = useState('')
+  const [category, setCategory] = useState('')
+  const [parts, setParts] = useState(null)          // starter parts for the vehicle
+  const [picked, setPicked] = useState(new Set())
+  const [numbers, setNumbers] = useState({})        // starter_id -> shop's part number
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState(null)        // {added, skipped}
+  const [collapsed, setCollapsed] = useState(new Set())
+
+  const loadVehicles = () => get('/parts/starter/vehicles')
+    .then(r => setVehicles(r.vehicles ?? []))
+    .catch(e => { toast(e.message, 'error'); setVehicles([]) })
+  useEffect(() => { loadVehicles() }, [])
+
+  const makes = useMemo(() => [...new Set((vehicles ?? []).map(v => v.make))], [vehicles])
+  const models = useMemo(() => [...new Set((vehicles ?? []).filter(v => v.make === make).map(v => v.model))],
+    [vehicles, make])
+  const gens = useMemo(() => (vehicles ?? []).filter(v => v.make === make && v.model === model),
+    [vehicles, make, model])
+
+  // Choosing a make/model with only one option fills in the next step.
+  useEffect(() => { setModel(models.length === 1 ? models[0] : '') }, [make, models.length])
+  useEffect(() => { setFamily(gens.length === 1 ? gens[0].family : '') }, [model, gens.length])
+
+  const loadParts = (fam, keepPicks = false) => {
+    if (!fam) { setParts(null); return }
+    setParts(null)
+    get(`/parts/starter?family=${encodeURIComponent(fam)}`)
+      .then(r => {
+        const items = r.items ?? []
+        setParts(items)
+        if (!keepPicks) setPicked(new Set(items.filter(i => !i.copied).map(i => i.starter_id)))
+      })
+      .catch(e => toast(e.message, 'error'))
+  }
+  useEffect(() => { setResult(null); setNumbers({}); setCategory(''); loadParts(family) }, [family])
+
+  const shown = useMemo(() => (parts ?? []).filter(p => !category || p.category === category), [parts, category])
+  const groups = useMemo(() => {
+    const g = new Map()
+    for (const p of shown) {
+      const k = p.category || '—'
+      if (!g.has(k)) g.set(k, { code: k, name: p.category_name || 'Uncategorized', items: [] })
+      g.get(k).items.push(p)
+    }
+    return [...g.values()]
+  }, [shown])
+  const presentCats = useMemo(() => {
+    const codes = new Set((parts ?? []).map(p => p.category))
+    return opts.categories.filter(c => codes.has(c.code))
+  }, [parts, opts.categories])
+
+  const available = shown.filter(p => !p.copied)
+  const pickedShown = available.filter(p => picked.has(p.starter_id))
+  const pickedAll = (parts ?? []).filter(p => !p.copied && picked.has(p.starter_id))
+  const toggle = (id) => setPicked(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
+  const setMany = (list, on) => setPicked(s => {
+    const n = new Set(s); list.forEach(p => on ? n.add(p.starter_id) : n.delete(p.starter_id)); return n
+  })
+  const toggleGroup = (code) => setCollapsed(s => { const n = new Set(s); n.has(code) ? n.delete(code) : n.add(code); return n })
+
+  const copy = async () => {
+    setBusy(true)
+    const added = [], skipped = []
+    try {
+      const picks = pickedAll.map(p => ({ starter_id: p.starter_id, part_number: (numbers[p.starter_id] || '').trim() || null }))
+      for (let i = 0; i < picks.length; i += COPY_CHUNK) {
+        const r = await post('/parts/starter/copy', { items: picks.slice(i, i + COPY_CHUNK) })
+        added.push(...r.added); skipped.push(...r.skipped)
+      }
+    } catch (e) { toast(e.message, 'error') }
+    finally {
+      setBusy(false)
+      if (added.length || skipped.length) {
+        setResult({ added, skipped })
+        setPicked(new Set()); setNumbers({})
+        loadParts(family, true); loadVehicles()
+        if (added.length) onCopied()
+      }
+    }
+  }
+
+  const byId = useMemo(() => Object.fromEntries((parts ?? []).map(p => [p.starter_id, p])), [parts])
+  const unverifiedAdded = result?.added.filter(a => !a.verified).length ?? 0
+
+  return (
+    <div className="overlay" onClick={e => e.target === e.currentTarget && !busy && onClose()}>
+      <div className="modal" style={{ maxWidth: 1000 }}>
+        <div className="modal-hd">
+          <h2>Copy parts from the starter set</h2>
+          <button className="modal-close" onClick={onClose} disabled={busy}>×</button>
+        </div>
+        <p style={{ ...muted, fontSize: 13, marginTop: -6, marginBottom: 14 }}>
+          Generic restoration parts each car typically needs, with category, fitment and quantity. Starter part
+          numbers (<span style={mono}>SS-…</span>) are placeholders — type your own number now, or leave it blank and
+          the part is marked <strong>Needs review</strong> so you can fix it later. Nothing already in your catalog
+          is changed.
+        </p>
+
+        {vehicles === null ? <div className="spinner" /> : vehicles.length === 0 ? (
+          <div className="empty"><strong>No starter set available</strong>The platform starter set hasn’t been loaded yet.</div>
+        ) : (
+          <>
+            <div className="fbar" style={{ marginBottom: 12, flexWrap: 'nowrap' }}>
+              <select value={make} onChange={e => setMake(e.target.value)} aria-label="Make">
+                <option value="">Make…</option>
+                {makes.map(m => <option key={m} value={m}>{m}</option>)}
+              </select>
+              <select value={model} onChange={e => setModel(e.target.value)} disabled={!make} aria-label="Model">
+                <option value="">Model…</option>
+                {models.map(m => <option key={m} value={m}>{m}</option>)}
+              </select>
+              <select value={family} onChange={e => setFamily(e.target.value)} disabled={!model} aria-label="Generation"
+                style={{ flex: 1, minWidth: 0 }}>
+                <option value="">Generation…</option>
+                {gens.map(v => (
+                  <option key={v.family} value={v.family}>
+                    {vehicleLabel(v)}{v.copied_count ? ` · ${v.copied_count}/${v.part_count} copied` : ''}
+                  </option>
+                ))}
+              </select>
+              <select value={category} onChange={e => setCategory(e.target.value)} disabled={!parts} aria-label="Category">
+                <option value="">All categories</option>
+                {presentCats.map(c => <option key={c.code} value={c.code}>{c.name}</option>)}
+              </select>
+            </div>
+
+            {result && (
+              <div className="card" style={{ padding: '10px 14px', marginBottom: 12, fontSize: 13 }}>
+                <strong>{result.added.length} part{result.added.length === 1 ? '' : 's'} copied</strong>
+                {unverifiedAdded > 0 && <span style={muted}> · {unverifiedAdded} need your part number (marked Needs review)</span>}
+                {result.skipped.length > 0 && (
+                  <>
+                    <span style={muted}> · {result.skipped.length} skipped</span>
+                    <ul style={{ margin: '6px 0 0 18px', ...muted }}>
+                      {result.skipped.slice(0, 8).map((s, i) => (
+                        <li key={i}>{byId[s.starter_id]?.description ?? s.part_number ?? s.starter_id}: {s.reason}
+                          {s.part_number && s.reason.includes('catalog') ? ` (${s.part_number})` : ''}</li>
+                      ))}
+                      {result.skipped.length > 8 && <li>…and {result.skipped.length - 8} more</li>}
+                    </ul>
+                  </>
+                )}
+              </div>
+            )}
+
+            {!family ? (
+              <div className="empty" style={{ padding: 30 }}>
+                <strong>Choose a vehicle</strong>
+                {vehicles.length} vehicles: {makes.join(', ')}.
+              </div>
+            ) : parts === null ? <div className="spinner" /> : (
+              <>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, fontSize: 13 }}>
+                  <span style={muted}>
+                    {pickedAll.length} selected · {shown.length} part{shown.length === 1 ? '' : 's'} shown
+                    {shown.length - available.length > 0 && `, ${shown.length - available.length} already copied`}
+                  </span>
+                  {available.length > 0 && (
+                    <button type="button" className="btn btn-secondary btn-sm"
+                      onClick={() => setMany(available, pickedShown.length !== available.length)}>
+                      {pickedShown.length === available.length ? 'Select none' : 'Select all'}
+                    </button>
+                  )}
+                </div>
+                <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius)', maxHeight: '52vh', overflowY: 'auto' }}>
+                  {groups.map(g => {
+                    const avail = g.items.filter(p => !p.copied)
+                    const on = avail.filter(p => picked.has(p.starter_id)).length
+                    const open = !collapsed.has(g.code)
+                    return (
+                      <div key={g.code}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px',
+                                      background: 'var(--bg)', borderBottom: '1px solid var(--border)',
+                                      position: 'sticky', top: 0, zIndex: 1 }}>
+                          <input type="checkbox" aria-label={`Select all ${g.name}`}
+                            checked={avail.length > 0 && on === avail.length}
+                            ref={el => { if (el) el.indeterminate = on > 0 && on < avail.length }}
+                            disabled={avail.length === 0}
+                            onChange={() => setMany(avail, on !== avail.length)} />
+                          <button type="button" onClick={() => toggleGroup(g.code)}
+                            style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                                     fontWeight: 600, fontSize: 13, color: 'inherit', flex: 1, textAlign: 'left' }}>
+                            {open ? '▾' : '▸'} {g.name}
+                          </button>
+                          <span style={{ ...muted, fontSize: 12 }}>
+                            {avail.length === 0 ? 'All in catalog'
+                              : `${on} of ${avail.length} selected` +
+                                (g.items.length > avail.length ? ` · ${g.items.length - avail.length} in catalog` : '')}
+                          </span>
+                        </div>
+                        {open && g.items.map(p => (
+                          <label key={p.starter_id} style={{
+                            display: 'flex', gap: 10, padding: '8px 12px 8px 34px', alignItems: 'flex-start',
+                            borderBottom: '1px solid var(--border)', cursor: p.copied ? 'default' : 'pointer',
+                            opacity: p.copied ? 0.55 : 1,
+                          }}>
+                            <input type="checkbox" style={{ marginTop: 3 }} disabled={p.copied}
+                              checked={p.copied || picked.has(p.starter_id)} onChange={() => toggle(p.starter_id)} />
+                            <span style={{ flex: 1, minWidth: 0 }}>
+                              <span style={{ fontSize: 14, fontWeight: 500 }}>{p.description.split(' — ')[0]}</span>
+                              {p.qty_per_vehicle && <span style={{ ...muted, fontSize: 12, marginLeft: 8 }}>× {p.qty_per_vehicle}</span>}
+                              {p.copied && <span className="badge badge-gray" style={{ marginLeft: 8 }}>In catalog</span>}
+                              <span style={{ display: 'block', ...muted, fontSize: 12, marginTop: 2 }}>
+                                <span style={mono}>{p.part_number}</span>
+                                {p.notes && <> · {p.notes}</>}
+                              </span>
+                            </span>
+                            {!p.copied && (
+                              <input value={numbers[p.starter_id] ?? ''} maxLength={60}
+                                placeholder="Your part no. (optional)"
+                                onFocus={() => !picked.has(p.starter_id) && toggle(p.starter_id)}
+                                onChange={e => setNumbers(x => ({ ...x, [p.starter_id]: e.target.value }))}
+                                style={{ ...smallInput, width: 220, ...mono }} />
+                            )}
+                          </label>
+                        ))}
+                      </div>
+                    )
+                  })}
+                </div>
+              </>
+            )}
+          </>
+        )}
+
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
+          <button type="button" className="btn btn-secondary" onClick={onClose} disabled={busy}>
+            {result ? 'Done' : 'Cancel'}
+          </button>
+          {family && parts && (
+            <button type="button" className="btn btn-primary" disabled={busy || pickedAll.length === 0} onClick={copy}>
+              {busy ? 'Copying…' : `Copy ${pickedAll.length} part${pickedAll.length === 1 ? '' : 's'}`}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── CSV import ────────────────────────────────────────────────────────────────
 
 // Catalog fields a CSV can fill, with the header names they're recognized by
@@ -805,7 +1067,8 @@ export default function PartsCatalog() {
   const [loadingMore, setLoadingMore] = useState(false)
   const [q, setQ] = useState('')
   const [category, setCategory] = useState('')
-  const [modal, setModal] = useState(null)          // 'add' | 'import' | {partId}
+  const [review, setReview] = useState(false)       // only parts awaiting review
+  const [modal, setModal] = useState(null)          // 'add' | 'import' | 'starter' | {partId}
   const dq = useDebounced(q.trim(), 300)
 
   useEffect(() => { get('/parts/options').then(setOpts).catch(e => toast(e.message, 'error')) }, [])
@@ -814,8 +1077,9 @@ export default function PartsCatalog() {
     const p = new URLSearchParams({ limit: '50' })
     if (dq) p.set('q', dq)
     if (category) p.set('category', category)
+    if (review) p.set('unverified', 'true')
     return p
-  }, [dq, category])
+  }, [dq, category, review])
 
   const load = useCallback(() => {
     setLoading(true)
@@ -836,7 +1100,7 @@ export default function PartsCatalog() {
     finally { setLoadingMore(false) }
   }
 
-  const filtered = dq || category
+  const filtered = dq || category || review
   return (
     <div>
       {modal === 'add' && (
@@ -845,6 +1109,7 @@ export default function PartsCatalog() {
           onCreated={(p) => { toast('Part added'); load(); setModal({ partId: p.catalog_part_id }) }} />
       )}
       {modal === 'import' && <ImportModal opts={opts} onClose={() => setModal(null)} onDone={load} />}
+      {modal === 'starter' && <StarterSetModal opts={opts} onClose={() => setModal(null)} onCopied={load} />}
       {modal?.partId && (
         <PartDetailModal partId={modal.partId} opts={opts} canEdit={canEdit} canDelete={isAdmin}
           onClose={() => setModal(null)} onChanged={load}
@@ -854,6 +1119,7 @@ export default function PartsCatalog() {
       <div className="ph">
         <h1>Parts Catalog</h1>
         <div style={{ display: 'flex', gap: 8 }}>
+          {isAdmin && <button className="btn btn-secondary" onClick={() => setModal('starter')}>Starter set</button>}
           {isAdmin && <button className="btn btn-secondary" onClick={() => setModal('import')}>Import CSV</button>}
           {canEdit && <button className="btn btn-primary" onClick={() => setModal('add')}>+ Add part</button>}
         </div>
@@ -871,6 +1137,11 @@ export default function PartsCatalog() {
           <option value="">All categories</option>
           {opts.categories.map(c => <option key={c.code} value={c.code}>{c.name}</option>)}
         </select>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, marginLeft: 6, whiteSpace: 'nowrap' }}>
+          <input type="checkbox" checked={review} onChange={e => setReview(e.target.checked)}
+            style={{ minWidth: 0, width: 'auto', padding: 0, margin: 0 }} />
+          Needs review
+        </label>
       </div>
 
       <div className="card">
@@ -881,9 +1152,11 @@ export default function PartsCatalog() {
             <div className="empty">
               <strong>Your catalog is empty</strong>
               {isAdmin
-                ? <>The quickest start is importing the parts list you already keep in a spreadsheet.
+                ? <>Import the parts list you already keep in a spreadsheet, or start from the platform
+                    starter set — the parts each car typically needs, picked by make and model.
                     <div style={{ marginTop: 14, display: 'flex', gap: 8, justifyContent: 'center' }}>
                       <button className="btn btn-primary" onClick={() => setModal('import')}>Import CSV</button>
+                      <button className="btn btn-secondary" onClick={() => setModal('starter')}>Starter set</button>
                       <button className="btn btn-secondary" onClick={() => setModal('add')}>Add a part</button>
                     </div></>
                 : canEdit ? 'Add parts as you quote and order them.' : 'Your shop hasn’t added any parts yet.'}
@@ -911,6 +1184,7 @@ export default function PartsCatalog() {
                     <td style={{ ...mono, whiteSpace: 'nowrap' }}>
                       {p.part_number}
                       {p.nla && <span className="badge badge-yellow" style={{ marginLeft: 6 }}>NLA</span>}
+                      {!p.verified && <span className="badge badge-yellow" style={{ marginLeft: 6 }}>Needs review</span>}
                     </td>
                     <td>
                       {p.description}
@@ -926,7 +1200,7 @@ export default function PartsCatalog() {
                       {p.vendor_count > 1 && <span style={{ ...muted, fontSize: 12 }}> +{p.vendor_count - 1}</span>}
                     </td>
                     <td style={{ textAlign: 'right' }}>{p.fitment_count || '—'}</td>
-                    <td><SourceBadge source={p.source} /></td>
+                    <td style={{ whiteSpace: 'nowrap' }}><SourceBadge source={p.source} /></td>
                   </tr>
                 ))}
               </tbody>
