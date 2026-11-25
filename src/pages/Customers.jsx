@@ -1,13 +1,18 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { useApi } from '../hooks/useApi'
 import { useToast } from '../context/ToastContext'
 import { useAuth } from '../context/AuthContext'
 import {
   YEAR_OPTIONS,
-  ENGINE_OPTIONS,
+  OTHER_ENGINE,
   useNhtsaMakes,
   useNhtsaModels,
+  useEngineOptions,
 } from '../hooks/useNhtsa'
+
+// Select value for the "Other (type it in)" choice. Never saved: the typed
+// text is what goes into vehicle.engine.
+const OTHER_VALUE = '__other__'
 
 const emptyV = () => ({
   year: '', makeId: '', make: '', model: '', engine: '',
@@ -19,19 +24,48 @@ function VRow({ v, i, onChange, onRemove }) {
   const set = (k, val) => onChange(i, { ...v, [k]: val })
 
   const { makes, loading: makesLoading }   = useNhtsaMakes()
-  const { models, loading: modelsLoading } = useNhtsaModels(v.make)
+  const { models, loading: modelsLoading } = useNhtsaModels(v.make, v.year)
+  const {
+    options: engineOptions, source: engineSource, loading: enginesLoading,
+  } = useEngineOptions(v.year, v.make, v.model)
 
+  // A saved model that vPIC doesn't list for this year still shows as chosen.
+  const modelChoices = v.model && !models.includes(v.model) ? [v.model, ...models] : models
+
+  // "Other" is chosen when the user picked it, or when the saved engine isn't
+  // in the current list (a swap typed in earlier, or a value from the generic
+  // list on a vehicle EPA now has engines for) — so nothing saved is hidden.
+  const [otherPicked, setOtherPicked] = useState(false)
+  const engineIsOther = otherPicked || (!enginesLoading && !!v.engine && !engineOptions.includes(v.engine))
+  const otherInput = useRef(null)
+
+  // Year and model now narrow the lists below them, so changing either
+  // clears what depended on it (as changing the make already did).
   const handleYearChange = (e) => {
-    onChange(i, { ...v, year: e.target.value })
+    setOtherPicked(false)
+    onChange(i, { ...v, year: e.target.value, model: '', engine: '' })
   }
 
   const handleMakeChange = (e) => {
     const selected = makes.find(m => m.name === e.target.value)
+    setOtherPicked(false)
     onChange(i, { ...v, make: e.target.value, makeId: selected?.id ?? '', model: '', engine: '' })
   }
 
   const handleModelChange = (e) => {
-    onChange(i, { ...v, model: e.target.value })
+    setOtherPicked(false)
+    onChange(i, { ...v, model: e.target.value, engine: '' })
+  }
+
+  const handleEngineChange = (e) => {
+    if (e.target.value === OTHER_VALUE) {
+      setOtherPicked(true)
+      set('engine', '')
+      setTimeout(() => otherInput.current?.focus(), 0)
+    } else {
+      setOtherPicked(false)
+      set('engine', e.target.value)
+    }
   }
 
   const Loading = () => (
@@ -77,26 +111,49 @@ function VRow({ v, i, onChange, onRemove }) {
           </select>
         </div>
 
-        {/* Model — cascades from Make via NHTSA */}
+        {/* Model — cascades from Make (and Year) via NHTSA */}
         <div className="fg">
           <label>Model {modelsLoading && <Loading />}</label>
           <select value={v.model} onChange={handleModelChange} disabled={!v.make || modelsLoading}>
             <option value="">{!v.make ? 'Select Make first' : 'Select…'}</option>
-            {models.map(m => (
+            {modelChoices.map(m => (
               <option key={m} value={m}>{m}</option>
             ))}
           </select>
         </div>
 
-        {/* Engine — static curated list, always available */}
+        {/* Engine — EPA's engines for this year/make/model when it has any,
+            otherwise the curated list; "Other" opens a free-text field */}
         <div className="fg">
-          <label>Engine</label>
-          <select value={v.engine} onChange={e => set('engine', e.target.value)}>
+          <label>
+            Engine{' '}
+            {enginesLoading ? <Loading /> : (
+              <span style={{ fontSize: 11, color: 'var(--muted)' }}>
+                {engineSource === 'epa' ? '· EPA list' : '· generic list'}
+              </span>
+            )}
+          </label>
+          <select
+            value={engineIsOther ? OTHER_VALUE : v.engine}
+            onChange={handleEngineChange}
+            disabled={enginesLoading}
+          >
             <option value="">Select…</option>
-            {ENGINE_OPTIONS.map(eng => (
+            {engineOptions.map(eng => (
               <option key={eng} value={eng}>{eng}</option>
             ))}
+            <option value={OTHER_VALUE}>Other (type it in)…</option>
           </select>
+          {engineIsOther && (
+            <input
+              ref={otherInput}
+              style={{ marginTop: 6 }}
+              value={v.engine === OTHER_ENGINE ? '' : v.engine}
+              onChange={e => set('engine', e.target.value)}
+              placeholder="e.g. 3.8 L Flat-6 (993 RS swap)"
+              maxLength={120}
+            />
+          )}
         </div>
 
         <div className="fg">
