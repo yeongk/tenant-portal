@@ -156,7 +156,11 @@ const engineCache = new Map()
  *   details  — the EPA option objects (cylinders, displacement_l, turbo,
  *              models, transmissions …) keyed by label; empty for 'curated'
  *   loading  — true while the backend lookup is in flight
+ *   resolvedFor — `${year}|${make}|${model}` the options belong to, so a
+ *              caller can tell a stale list from the one for its inputs
  */
+const engineKey = (year, make, model) => `${year ?? ''}|${make ?? ''}|${model ?? ''}`
+
 const wantsEpa = (year, make, model) => {
   const yr = Number(year)
   return !!(yr && make && model && yr >= EPA_FIRST_YEAR)
@@ -166,14 +170,20 @@ export function useEngineOptions(year, make, model) {
   const { get } = useApi()
   // Start in "loading" when a lookup is about to run, so a saved EPA label
   // isn't briefly treated as a free-text "Other" engine on first render.
-  const [state, setState] = useState(() => ({
-    options: CURATED_ENGINES, source: 'curated', details: {}, loading: wantsEpa(year, make, model),
-  }))
+  const [state, setState] = useState(() => {
+    const epa = wantsEpa(year, make, model)
+    return {
+      options: CURATED_ENGINES, source: 'curated', details: {}, loading: epa,
+      resolvedFor: epa ? null : engineKey(year, make, model),
+    }
+  })
 
   useEffect(() => {
     const yr = Number(year)
+    const resolvedFor = engineKey(year, make, model)
+    const curated = { options: CURATED_ENGINES, source: 'curated', details: {}, loading: false, resolvedFor }
     if (!wantsEpa(year, make, model)) {
-      setState({ options: CURATED_ENGINES, source: 'curated', details: {}, loading: false })
+      setState(curated)
       return
     }
     let live = true
@@ -194,16 +204,41 @@ export function useEngineOptions(year, make, model) {
             source: 'epa',
             details: Object.fromEntries(epa.map(o => [o.label, o])),
             loading: false,
+            resolvedFor,
           })
         } else {
-          setState({ options: CURATED_ENGINES, source: 'curated', details: {}, loading: false })
+          setState(curated)
         }
       })
       .catch(() => {
-        if (live) setState({ options: CURATED_ENGINES, source: 'curated', details: {}, loading: false })
+        if (live) setState(curated)
       })
     return () => { live = false }
   }, [year, make, model, get])
 
   return state
+}
+
+/**
+ * The entry in an engine list that a decoded VIN engine (GET
+ * /api/vehicle/decode/{vin} → engine) stands for, or null when none does.
+ *   EPA list:     same cylinders and displacement (±0.05 L); turbo breaks ties.
+ *   curated list: the layout, e.g. "Flat-6", "Inline-4", "V8".
+ */
+export function matchVinEngine(vinEngine, { options, source, details }) {
+  if (!vinEngine) return null
+  if (vinEngine.label === 'Electric' && options.includes('Electric')) return 'Electric'
+  if (source !== 'epa') {
+    return vinEngine.layout && options.includes(vinEngine.layout) ? vinEngine.layout : null
+  }
+  const { cylinders, displacement_l: displ } = vinEngine
+  if (!cylinders || !displ) return null
+  const same = options.filter(label => {
+    const d = details[label]
+    return d && d.cylinders === cylinders && d.displacement_l != null
+      && Math.abs(d.displacement_l - displ) < 0.05
+  })
+  if (same.length <= 1) return same[0] ?? null
+  const turbo = !!vinEngine.turbo
+  return same.find(label => !!details[label].turbo === turbo) ?? same[0]
 }

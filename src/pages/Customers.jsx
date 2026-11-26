@@ -8,26 +8,149 @@ import {
   useNhtsaMakes,
   useNhtsaModels,
   useEngineOptions,
+  matchVinEngine,
 } from '../hooks/useNhtsa'
 
 // Select value for the "Other (type it in)" choice. Never saved: the typed
 // text is what goes into vehicle.engine.
 const OTHER_VALUE = '__other__'
 
+// A 17-character VIN (1981 on): letters and digits, no I, O or Q.
+const VIN_RE = /^[A-HJ-NPR-Z0-9]{17}$/i
+
+// Fields a VIN decode can fill, in the order the preview lists them.
+const VIN_FIELDS = [
+  ['year',   'Year'],
+  ['make',   'Make'],
+  ['model',  'Model'],
+  ['engine', 'Engine'],
+]
+
+// vPIC answers ErrorCode "0" for a clean decode; any other code is a
+// warning worth showing (e.g. "1 - Check Digit (9th position) does not calculate properly").
+const vinWarning = (r) => {
+  const code = String(r.error_code ?? '').split(',')[0].trim()
+  return code && code !== '0' ? r.error_text : null
+}
+
 const emptyV = () => ({
   year: '', makeId: '', make: '', model: '', engine: '',
   plate: '', vin: '', nickname: '',
 })
 
+// ── VIN decode preview / result, shown under a vehicle row ──────────────────
+function VinDecodePanel({ state, current, onToggle, onApply, onCancel }) {
+  if (state.status === 'idle' || state.status === 'loading') return null
+
+  const box = {
+    border: '1px solid var(--border)', borderRadius: 6, padding: '8px 10px',
+    marginBottom: 8, fontSize: 13, background: 'var(--bg)',
+  }
+  const muted = { color: 'var(--muted)' }
+
+  if (state.status === 'error') {
+    return (
+      <div style={{ ...box, display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+        <span style={{ color: 'var(--danger)' }}>{state.message}</span>
+        <button type="button" className="btn btn-secondary btn-sm" onClick={onCancel}>Dismiss</button>
+      </div>
+    )
+  }
+
+  if (state.status === 'applied') {
+    return (
+      <div style={{ ...box, ...muted }}>
+        {state.filled.length
+          ? `Filled in from the VIN: ${state.filled.join(', ')}. Review, then save.`
+          : 'Nothing was changed.'}
+      </div>
+    )
+  }
+
+  // preview
+  const { result: r, proposed, changes, picked } = state
+  const about = [r.trim, r.series, r.body_class, r.drive_type, r.transmission].filter(Boolean)
+  const warning = vinWarning(r)
+  const anyPicked = changes.some(k => picked[k])
+
+  return (
+    <div style={box}>
+      <div style={{ marginBottom: 6 }}>
+        <strong>NHTSA: {[r.year, r.make, r.model].filter(Boolean).join(' ') || 'decoded'}</strong>
+        {about.length > 0 && <span style={muted}> · {about.join(' · ')}</span>}
+      </div>
+      {warning && (
+        <div style={{ color: 'var(--danger)', marginBottom: 6 }}>{warning}</div>
+      )}
+      {changes.length === 0 ? (
+        <div style={{ ...muted, marginBottom: 6 }}>The VIN matches what's entered — nothing to change.</div>
+      ) : (
+        <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 8 }}>
+          <thead>
+            <tr style={{ ...muted, textAlign: 'left', fontSize: 12 }}>
+              <th style={{ width: 24 }} />
+              <th>Field</th>
+              <th>Now</th>
+              <th>From VIN</th>
+            </tr>
+          </thead>
+          <tbody>
+            {VIN_FIELDS.filter(([k]) => changes.includes(k)).map(([k, label]) => (
+              <tr key={k} style={{ borderTop: '1px solid var(--border)' }}>
+                <td>
+                  <input
+                    type="checkbox"
+                    checked={!!picked[k]}
+                    onChange={() => onToggle(k)}
+                    aria-label={`Use ${label} from the VIN`}
+                  />
+                </td>
+                <td>{label}</td>
+                <td style={muted}>{current[k] || '—'}</td>
+                <td>
+                  <strong>{proposed[k]}</strong>
+                  {k === 'engine' && (
+                    <div style={{ ...muted, fontSize: 11 }}>
+                      matched to the engine list when it has this engine
+                    </div>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+        <button type="button" className="btn btn-secondary btn-sm" onClick={onCancel}>
+          {changes.length ? 'Cancel' : 'Close'}
+        </button>
+        {changes.length > 0 && (
+          <button type="button" className="btn btn-primary btn-sm" onClick={onApply} disabled={!anyPicked}>
+            Apply selected
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── Single vehicle row ─────────────────────────────────────────────────────────
 function VRow({ v, i, onChange, onRemove }) {
   const set = (k, val) => onChange(i, { ...v, [k]: val })
 
+  const { get } = useApi()
   const { makes, loading: makesLoading }   = useNhtsaMakes()
   const { models, loading: modelsLoading } = useNhtsaModels(v.make, v.year)
+  const engines = useEngineOptions(v.year, v.make, v.model)
   const {
     options: engineOptions, source: engineSource, loading: enginesLoading,
-  } = useEngineOptions(v.year, v.make, v.model)
+  } = engines
+
+  // A saved make that isn't in vPIC's car list (e.g. one a VIN decode filled
+  // in for a truck or motorcycle maker) still shows as chosen.
+  const makeChoices = v.make && makes.length && !makes.some(m => m.name === v.make)
+    ? [{ id: `saved-${v.make}`, name: v.make }, ...makes]
+    : makes
 
   // A saved model that vPIC doesn't list for this year still shows as chosen.
   const modelChoices = v.model && !models.includes(v.model) ? [v.model, ...models] : models
@@ -56,6 +179,85 @@ function VRow({ v, i, onChange, onRemove }) {
     setOtherPicked(false)
     onChange(i, { ...v, model: e.target.value, engine: '' })
   }
+
+  // ── VIN decode (fastapi-sam GET /api/vehicle/decode/{vin} → NHTSA vPIC) ──
+  //   idle | loading | preview (proposed changes, a checkbox each) | applied | error
+  const [vinDecode, setVinDecode] = useState({ status: 'idle' })
+  // After Apply, the decoded engine is matched to an entry in the engine
+  // list once that list has loaded for the new year/make/model.
+  const [pendingEngine, setPendingEngine] = useState(null)
+  const vinReady = VIN_RE.test((v.vin ?? '').trim())
+
+  const handleVinChange = (e) => {
+    if (vinDecode.status !== 'idle') setVinDecode({ status: 'idle' })
+    set('vin', e.target.value)
+  }
+
+  const decodeVin = async () => {
+    const vin = v.vin.trim().toUpperCase()
+    setVinDecode({ status: 'loading' })
+    try {
+      const r = await get(`/vehicle/decode/${encodeURIComponent(vin)}`)
+      if (!r.decoded) {
+        setVinDecode({ status: 'error', message: `NHTSA couldn't decode this VIN${r.error_text ? `: ${r.error_text}` : '.'}` })
+        return
+      }
+      const make = r.make
+        ? makes.find(m => m.name.toLowerCase() === r.make.toLowerCase()) ?? { id: '', name: r.make }
+        : null
+      const proposed = {
+        year:   r.year ? String(r.year) : '',
+        make:   make?.name ?? '',
+        makeId: make?.id ?? '',
+        model:  r.model ?? '',
+        engine: r.engine?.label ?? '',
+      }
+      const changes = VIN_FIELDS
+        .map(([k]) => k)
+        .filter(k => proposed[k] && proposed[k] !== (v[k] ?? ''))
+      setVinDecode({
+        status: 'preview', vin, result: r, proposed, changes,
+        picked: Object.fromEntries(changes.map(k => [k, true])),
+      })
+    } catch (err) {
+      setVinDecode({ status: 'error', message: err.message || 'VIN decode failed' })
+    }
+  }
+
+  const togglePicked = (k) =>
+    setVinDecode(d => ({ ...d, picked: { ...d.picked, [k]: !d.picked[k] } }))
+
+  const applyVinDecode = () => {
+    const { proposed, picked, result, vin } = vinDecode
+    const next = { ...v, vin }
+    for (const [k] of VIN_FIELDS) {
+      if (picked[k]) next[k] = proposed[k]
+    }
+    if (picked.make) next.makeId = proposed.makeId
+    // Same cascade as the dropdowns: a new year or make clears the model and
+    // engine, and a new model clears the engine, unless those came from the
+    // VIN too.
+    const yearOrMake = (picked.year && proposed.year !== v.year) || (picked.make && proposed.make !== v.make)
+    if (yearOrMake && !picked.model) next.model = ''
+    if ((yearOrMake || (picked.model && proposed.model !== v.model)) && !picked.engine) next.engine = ''
+    setOtherPicked(false)
+    setPendingEngine(picked.engine
+      ? { key: `${next.year}|${next.make}|${next.model}`, engine: result.engine }
+      : null)
+    onChange(i, next)
+    const filled = VIN_FIELDS.filter(([k]) => picked[k]).map(([, label]) => label.toLowerCase())
+    setVinDecode({ status: 'applied', filled })
+  }
+
+  useEffect(() => {
+    if (!pendingEngine) return
+    const key = `${v.year}|${v.make}|${v.model}`
+    if (pendingEngine.key !== key) { setPendingEngine(null); return }   // edited since
+    if (engines.loading || engines.resolvedFor !== key) return            // list not ready yet
+    const match = matchVinEngine(pendingEngine.engine, engines)
+    setPendingEngine(null)
+    if (match && match !== v.engine) onChange(i, { ...v, engine: match })
+  }, [pendingEngine, engines, v, i, onChange])
 
   const handleEngineChange = (e) => {
     if (e.target.value === OTHER_VALUE) {
@@ -105,7 +307,7 @@ function VRow({ v, i, onChange, onRemove }) {
           <label>Make {makesLoading && <Loading />}</label>
           <select value={v.make} onChange={handleMakeChange} disabled={makesLoading}>
             <option value="">Select…</option>
-            {makes.map(m => (
+            {makeChoices.map(m => (
               <option key={m.id} value={m.name}>{m.name}</option>
             ))}
           </select>
@@ -163,10 +365,41 @@ function VRow({ v, i, onChange, onRemove }) {
 
         <div className="fg">
           <label>VIN</label>
-          <input value={v.vin} onChange={e => set('vin', e.target.value)} />
+          <div style={{ display: 'flex', gap: 6 }}>
+            <input
+              style={{ flex: 1, minWidth: 0 }}
+              value={v.vin}
+              onChange={handleVinChange}
+              onKeyDown={e => {
+                // Enter decodes instead of submitting the customer form.
+                if (e.key === 'Enter') { e.preventDefault(); if (vinReady) decodeVin() }
+              }}
+              maxLength={32}
+              spellCheck={false}
+            />
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={decodeVin}
+              disabled={!vinReady || vinDecode.status === 'loading'}
+              title={vinReady
+                ? 'Look this VIN up with NHTSA and fill in year, make, model and engine'
+                : 'Enter a 17-character VIN (1981 or later) to decode it'}
+            >
+              {vinDecode.status === 'loading' ? 'Decoding…' : 'Decode'}
+            </button>
+          </div>
         </div>
 
       </div>
+
+      <VinDecodePanel
+        state={vinDecode}
+        current={v}
+        onToggle={togglePicked}
+        onApply={applyVinDecode}
+        onCancel={() => setVinDecode({ status: 'idle' })}
+      />
 
       <div className="fg">
         <label>Nickname</label>
