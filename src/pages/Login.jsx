@@ -51,7 +51,7 @@ export default function Login() {
   const [error,    setError]    = useState('')
   const [loading,  setLoading]  = useState(false)
 
-  // after a successful auth, holds {id_token, tenant_id, shop_name, user_type, cog_group}
+  // after a successful auth, holds {id_token, tenant_id, shop_name, user_type, cog_group, user_name, user_email}
   // while waiting for the user to complete the change-password step
   const [pendingSession, setPendingSession] = useState(null)
 
@@ -92,6 +92,8 @@ export default function Login() {
       shop_name: data.shop_name,
       user_type: userType,
       cog_group: cogGroup,
+      user_name:  data.user_name  || claims.name  || '',
+      user_email: data.user_email || claims.email || email || mfa?.email || '',
     }
 
     if (data.password_changed === false) {

@@ -3,12 +3,23 @@ import { useAuth } from '../context/AuthContext'
 import { useBranding } from '../context/BrandingContext'
 import { useNavigate } from 'react-router-dom'
 
+// Initials for the user avatar: "Jane Q. Doe" -> "JD", "jane" -> "J",
+// falls back to the first letter of the email, then "U".
+function userInitials(name, email) {
+  const parts = (name || '').trim().split(/\s+/).filter(Boolean)
+  if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+  if (parts.length === 1) return parts[0][0].toUpperCase()
+  return email?.[0]?.toUpperCase() ?? 'U'
+}
+
 export default function Topbar() {
-  const { shopName, tenantId, logout } = useAuth()
+  const { shopName, tenantId, userName, userEmail, logout } = useAuth()
   const { primary, logoUrl } = useBranding()
   const nav = useNavigate()
 
   const displayName = shopName || tenantId
+  const initials    = userInitials(userName, userEmail)
+  const userLabel   = userName && userEmail ? `${userName} (${userEmail})` : (userName || userEmail)
 
   // primary from BrandingContext is the last PUBLISHED colour.
   // Falls back to a neutral dark if no theme has been published yet
@@ -50,16 +61,21 @@ export default function Topbar() {
         </span>
       </div>
 
-      {/* Right: user avatar + log out */}
+      {/* Right: user avatar (logged-in user) + log out */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        <div style={{
-          width: 30, height: 30, borderRadius: '50%',
-          background: 'rgba(255,255,255,0.25)',
-          color: '#ffffff',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: 13, fontWeight: 600,
-        }}>
-          {displayName?.[0]?.toUpperCase() ?? 'U'}
+        <div
+          title={userLabel || undefined}
+          aria-label={userLabel ? `Signed in as ${userLabel}` : 'Signed-in user'}
+          style={{
+            width: 30, height: 30, borderRadius: '50%',
+            background: 'rgba(255,255,255,0.25)',
+            color: '#ffffff',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: initials.length > 1 ? 12 : 13, fontWeight: 600,
+            cursor: 'default',
+          }}
+        >
+          {initials}
         </div>
         <button
           className="btn btn-secondary btn-sm"
