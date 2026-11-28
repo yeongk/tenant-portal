@@ -160,8 +160,9 @@ export default function Staff() {
   // the credentials dialog. Cleared when the admin dismisses the dialog.
   const [newStaff,   setNewStaff] = useState(null)
 
-  // Row-level edit — specialty and role_id. SHOP_ADMIN only (enforced server-side too).
+  // Row-level edit — email, specialty and role_id. SHOP_ADMIN only (enforced server-side too).
   const [editingId,     setEditingId]     = useState(null)
+  const [editEmail,     setEditEmail]     = useState('')
   const [editSpecialty, setEditSpecialty] = useState('')
   const [editRoleId,    setEditRoleId]    = useState('')
   const [saving,        setSaving]        = useState(false)
@@ -199,18 +200,31 @@ export default function Staff() {
 
   const startEdit = (s) => {
     setEditingId(s.staff_id)
+    setEditEmail(s.email || '')
     setEditSpecialty(s.specialty || '')
     setEditRoleId(s.role_id || '')
   }
   const cancelEdit = () => {
     setEditingId(null)
+    setEditEmail('')
     setEditSpecialty('')
     setEditRoleId('')
   }
-  const saveEdit = async (id) => {
+  const saveEdit = async (s) => {
+    const body = { specialty: editSpecialty, role_id: editRoleId }
+    const newEmail = editEmail.trim().toLowerCase()
+    if (newEmail !== (s.email || '').toLowerCase()) {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail)) {
+        toast('Enter a valid email address', 'error'); return
+      }
+      if (!confirm(`Change ${s.full_name}'s login email to ${newEmail}?\n\n` +
+                   'They will sign in with the new address from now on (same password). ' +
+                   'If they work at other shops on this platform, it changes there too.')) return
+      body.email = newEmail
+    }
     setSaving(true)
     try {
-      await patch(`/staff/${id}`, { specialty: editSpecialty, role_id: editRoleId })
+      await patch(`/staff/${s.staff_id}`, body)
       toast('Staff updated')
       setEditingId(null)
       load()
@@ -287,7 +301,16 @@ export default function Staff() {
                           : <span style={{ color: 'var(--muted)' }}>—</span>
                       )}
                     </td>
-                    <td>{s.email}</td>
+                    <td>
+                      {editing ? (
+                        <input
+                          type="email"
+                          value={editEmail}
+                          onChange={e => setEditEmail(e.target.value)}
+                          style={{ padding: '4px 8px', fontSize: 13, minWidth: 200 }}
+                        />
+                      ) : s.email}
+                    </td>
                     <td style={{ color: 'var(--muted)' }}>
                       {editing ? (
                         <input
@@ -303,7 +326,7 @@ export default function Staff() {
                         {editing ? (
                           <div style={{ display: 'flex', gap: 6 }}>
                             <button className="btn btn-primary btn-sm" disabled={saving}
-                              onClick={() => saveEdit(s.staff_id)}>
+                              onClick={() => saveEdit(s)}>
                               {saving ? 'Saving…' : 'Save'}
                             </button>
                             <button className="btn btn-secondary btn-sm" onClick={cancelEdit}>
