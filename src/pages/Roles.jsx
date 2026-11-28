@@ -10,10 +10,17 @@ import { useToast } from '../context/ToastContext'
 // (supervisor, mechanic, master engine builder, advisor, etc.) that get
 // assigned to MECHANIC-group staff on the Staff page's Role field.
 //
-// Each role carries a worker designation (short code + name, e.g. "MT" /
-// "Master Technician") and an experience level. Every field is editable.
+// Each role carries a worker designation (code + name, picked from the
+// worker-designation reference list) and an experience level. Every field
+// is editable.
+//
+// Designation options: this shop's worker designations — the TENANT#<tenant_id>
+// rows of the dms-worker-designation table (GET /reference/worker-designations),
+// in their sort order. Inactive rows are left out of the pick list, matching
+// the reference-data convention.
 
-export const EXPERIENCE_LEVELS = ['Apprentice', 'Junior', 'Intermediate', 'Senior', 'Master']
+// Mirrors EXPERIENCE_LEVEL in fastapi-sam app/service/reference_data.py.
+export const EXPERIENCE_LEVELS = ['Apprentice', 'Junior', 'Technician', 'Senior', 'Master']
 
 const EMPTY_ROLE = {
   name: '', description: '', designation_code: '', designation_name: '', experience_level: '',
@@ -49,12 +56,38 @@ function ExperienceSelect({ value, onChange, style }) {
   )
 }
 
+// Pull-down of worker designations. Selecting one sets both code and name.
+// A stored designation that's no longer in the list (renamed, deactivated or
+// deleted) stays selectable so editing other fields doesn't wipe it.
+function DesignationSelect({ options, code, name, onChange, style }) {
+  const known = options.some(o => o.code === code)
+  const list  = code && !known ? [...options, { code, name, legacy: true }] : options
+  return (
+    <select
+      value={code}
+      onChange={e => {
+        const o = list.find(x => x.code === e.target.value)
+        onChange(o ? { designation_code: o.code, designation_name: o.name }
+                   : { designation_code: '', designation_name: '' })
+      }}
+      style={style}
+    >
+      <option value="">{options.length ? 'Not set' : 'Not set (no worker designations set up)'}</option>
+      {list.map(o => (
+        <option key={o.code} value={o.code} title={o.description || undefined}>
+          {o.code} — {o.name}{o.legacy ? ' (not in list)' : ''}
+        </option>
+      ))}
+    </select>
+  )
+}
+
 function designationLabel(r) {
   if (r.designation_code && r.designation_name) return `${r.designation_code} — ${r.designation_name}`
   return r.designation_code || r.designation_name || ''
 }
 
-function AddRoleModal({ onClose, onCreated }) {
+function AddRoleModal({ designations, onClose, onCreated }) {
   const { post } = useApi()
   const toast    = useToast()
   const [f, setF]       = useState(EMPTY_ROLE)
@@ -91,16 +124,10 @@ function AddRoleModal({ onClose, onCreated }) {
             <input value={f.description} onChange={e => set('description', e.target.value)}
               placeholder="Optional — what this role covers" />
           </div>
-          <div style={{ display: 'flex', gap: 10 }}>
-            <div className="fg" style={{ width: 120 }}><label>Designation Code</label>
-              <input value={f.designation_code} maxLength={20}
-                onChange={e => set('designation_code', e.target.value)} placeholder="e.g. MT" />
-            </div>
-            <div className="fg" style={{ flex: 1 }}><label>Designation Name</label>
-              <input value={f.designation_name} maxLength={100}
-                onChange={e => set('designation_name', e.target.value)}
-                placeholder="e.g. Master Technician" />
-            </div>
+          <div className="fg"><label>Worker Designation</label>
+            <DesignationSelect options={designations}
+              code={f.designation_code} name={f.designation_name}
+              onChange={d => setF(x => ({ ...x, ...d }))} />
           </div>
           <div className="fg"><label>Experience Level</label>
             <ExperienceSelect value={f.experience_level} onChange={v => set('experience_level', v)} />
@@ -123,6 +150,7 @@ export default function Roles() {
   const [roles,   setRoles]   = useState([])
   const [loading, setLoading] = useState(true)
   const [showAdd, setShowAdd] = useState(false)
+  const [designations, setDesignations] = useState([])
 
   // Row-level edit — every field (name, description, designation code/name,
   // experience level).
@@ -140,6 +168,16 @@ export default function Roles() {
   }
 
   useEffect(load, [])
+
+  // This shop's worker designations (dms-worker-designation, PK TENANT#<tenant_id>).
+  useEffect(() => {
+    get('/reference/worker-designations')
+      .then(d => setDesignations(
+        (d.items ?? [])
+          .filter(i => i.active !== false)
+          .map(i => ({ code: i.code, name: i.name, description: i.description }))))
+      .catch(e => toast(e.message, 'error'))
+  }, [])
 
   const handleCreated = () => {
     setShowAdd(false)
@@ -182,7 +220,8 @@ export default function Roles() {
   return (
     <div>
       {showAdd && (
-        <AddRoleModal onClose={() => setShowAdd(false)} onCreated={handleCreated} />
+        <AddRoleModal designations={designations}
+          onClose={() => setShowAdd(false)} onCreated={handleCreated} />
       )}
 
       <div className="ph">
@@ -230,14 +269,10 @@ export default function Roles() {
                     </td>
                     <td>
                       {editing ? (
-                        <div style={{ display: 'flex', gap: 6 }}>
-                          <input value={editF.designation_code} maxLength={20}
-                            onChange={e => setE('designation_code', e.target.value)}
-                            placeholder="Code" style={{ ...cellInput, width: 70 }} />
-                          <input value={editF.designation_name} maxLength={100}
-                            onChange={e => setE('designation_name', e.target.value)}
-                            placeholder="Name" style={{ ...cellInput, minWidth: 140 }} />
-                        </div>
+                        <DesignationSelect options={designations}
+                          code={editF.designation_code} name={editF.designation_name}
+                          onChange={d => setEditF(x => ({ ...x, ...d }))}
+                          style={{ ...cellInput, maxWidth: 260 }} />
                       ) : (designationLabel(r) || '—')}
                     </td>
                     <td>
