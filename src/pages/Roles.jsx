@@ -9,23 +9,64 @@ import { useToast } from '../context/ToastContext'
 // workforce), and CLIENT (end customer). This page manages the business roles
 // (supervisor, mechanic, master engine builder, advisor, etc.) that get
 // assigned to MECHANIC-group staff on the Staff page's Role field.
+//
+// Each role carries a worker designation (short code + name, e.g. "MT" /
+// "Master Technician") and an experience level. Every field is editable.
+
+export const EXPERIENCE_LEVELS = ['Apprentice', 'Junior', 'Intermediate', 'Senior', 'Master']
+
+const EMPTY_ROLE = {
+  name: '', description: '', designation_code: '', designation_name: '', experience_level: '',
+}
+
+// Request body for POST/PATCH. Optional fields are sent as (trimmed) strings —
+// an empty string clears the field on PATCH.
+const toBody = (f) => ({
+  name:             f.name.trim(),
+  description:      f.description.trim(),
+  designation_code: f.designation_code.trim(),
+  designation_name: f.designation_name.trim(),
+  experience_level: f.experience_level,
+})
+
+const fromRole = (r) => ({
+  name:             r.name || '',
+  description:      r.description || '',
+  designation_code: r.designation_code || '',
+  designation_name: r.designation_name || '',
+  experience_level: r.experience_level || '',
+})
+
+// Keeps a stored level that isn't in the standard list selectable.
+function ExperienceSelect({ value, onChange, style }) {
+  const options = value && !EXPERIENCE_LEVELS.includes(value)
+    ? [...EXPERIENCE_LEVELS, value] : EXPERIENCE_LEVELS
+  return (
+    <select value={value} onChange={e => onChange(e.target.value)} style={style}>
+      <option value="">Not set</option>
+      {options.map(l => <option key={l} value={l}>{l}</option>)}
+    </select>
+  )
+}
+
+function designationLabel(r) {
+  if (r.designation_code && r.designation_name) return `${r.designation_code} — ${r.designation_name}`
+  return r.designation_code || r.designation_name || ''
+}
 
 function AddRoleModal({ onClose, onCreated }) {
   const { post } = useApi()
   const toast    = useToast()
-  const [f, setF]       = useState({ name: '', description: '', billing_rate: '' })
+  const [f, setF]       = useState(EMPTY_ROLE)
   const [loading, setL] = useState(false)
   const set = (k, v) => setF(x => ({ ...x, [k]: v }))
 
   const submit = async (e) => {
     e.preventDefault()
+    if (!f.name.trim()) { toast('Role name is required', 'error'); return }
     setL(true)
     try {
-      const created = await post('/roles', {
-        name: f.name,
-        description: f.description || null,
-        billing_rate: f.billing_rate === '' ? null : Number(f.billing_rate),
-      })
+      const created = await post('/roles', toBody(f))
       onCreated(created)
     } catch (err) {
       toast(err.message, 'error')
@@ -50,9 +91,19 @@ function AddRoleModal({ onClose, onCreated }) {
             <input value={f.description} onChange={e => set('description', e.target.value)}
               placeholder="Optional — what this role covers" />
           </div>
-          <div className="fg"><label>Billing Rate ($/hr)</label>
-            <input type="number" min="0" step="0.01" value={f.billing_rate}
-              onChange={e => set('billing_rate', e.target.value)} placeholder="Optional" />
+          <div style={{ display: 'flex', gap: 10 }}>
+            <div className="fg" style={{ width: 120 }}><label>Designation Code</label>
+              <input value={f.designation_code} maxLength={20}
+                onChange={e => set('designation_code', e.target.value)} placeholder="e.g. MT" />
+            </div>
+            <div className="fg" style={{ flex: 1 }}><label>Designation Name</label>
+              <input value={f.designation_name} maxLength={100}
+                onChange={e => set('designation_name', e.target.value)}
+                placeholder="e.g. Master Technician" />
+            </div>
+          </div>
+          <div className="fg"><label>Experience Level</label>
+            <ExperienceSelect value={f.experience_level} onChange={v => set('experience_level', v)} />
           </div>
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 6 }}>
             <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
@@ -73,10 +124,12 @@ export default function Roles() {
   const [loading, setLoading] = useState(true)
   const [showAdd, setShowAdd] = useState(false)
 
-  // Row-level edit — name, description, billing_rate.
+  // Row-level edit — every field (name, description, designation code/name,
+  // experience level).
   const [editingId, setEditingId] = useState(null)
-  const [editF,      setEditF]     = useState({ name: '', description: '', billing_rate: '' })
+  const [editF,      setEditF]     = useState(EMPTY_ROLE)
   const [saving,     setSaving]    = useState(false)
+  const setE = (k, v) => setEditF(x => ({ ...x, [k]: v }))
 
   const load = () => {
     setLoading(true)
@@ -103,24 +156,17 @@ export default function Roles() {
 
   const startEdit = (r) => {
     setEditingId(r.role_id)
-    setEditF({
-      name: r.name || '',
-      description: r.description || '',
-      billing_rate: r.billing_rate ?? '',
-    })
+    setEditF(fromRole(r))
   }
   const cancelEdit = () => {
     setEditingId(null)
-    setEditF({ name: '', description: '', billing_rate: '' })
+    setEditF(EMPTY_ROLE)
   }
   const saveEdit = async (id) => {
+    if (!editF.name.trim()) { toast('Role name is required', 'error'); return }
     setSaving(true)
     try {
-      await patch(`/roles/${id}`, {
-        name: editF.name,
-        description: editF.description || null,
-        billing_rate: editF.billing_rate === '' ? null : Number(editF.billing_rate),
-      })
+      await patch(`/roles/${id}`, toBody(editF))
       toast('Role updated')
       setEditingId(null)
       load()
@@ -130,6 +176,8 @@ export default function Roles() {
       setSaving(false)
     }
   }
+
+  const cellInput = { padding: '4px 8px', fontSize: 13 }
 
   return (
     <div>
@@ -146,7 +194,7 @@ export default function Roles() {
         Business roles assigned to staff on the Staff page — distinct from Cognito
         access groups. Every staff account is added to the MECHANIC group; the
         role below (supervisor, mechanic, master engine builder, advisor, etc.)
-        tracks their title, description, and billing rate.
+        tracks their title, description, worker designation, and experience level.
       </p>
 
       <div className="card">
@@ -158,7 +206,8 @@ export default function Roles() {
           <table>
             <thead>
               <tr>
-                <th>Name</th><th>Description</th><th>Billing Rate</th><th></th>
+                <th>Name</th><th>Description</th><th>Worker Designation</th>
+                <th>Experience Level</th><th></th>
               </tr>
             </thead>
             <tbody>
@@ -168,33 +217,36 @@ export default function Roles() {
                   <tr key={r.role_id}>
                     <td style={{ fontWeight: 500 }}>
                       {editing ? (
-                        <input
-                          value={editF.name}
-                          onChange={e => setEditF(x => ({ ...x, name: e.target.value }))}
-                          style={{ padding: '4px 8px', fontSize: 13 }}
-                        />
+                        <input value={editF.name} onChange={e => setE('name', e.target.value)}
+                          style={cellInput} />
                       ) : r.name}
                     </td>
                     <td style={{ color: 'var(--muted)' }}>
                       {editing ? (
-                        <input
-                          value={editF.description}
-                          onChange={e => setEditF(x => ({ ...x, description: e.target.value }))}
-                          placeholder="Optional"
-                          style={{ padding: '4px 8px', fontSize: 13, width: '100%' }}
-                        />
+                        <input value={editF.description}
+                          onChange={e => setE('description', e.target.value)}
+                          placeholder="Optional" style={{ ...cellInput, width: '100%' }} />
                       ) : (r.description || '—')}
                     </td>
                     <td>
                       {editing ? (
-                        <input
-                          type="number" min="0" step="0.01"
-                          value={editF.billing_rate}
-                          onChange={e => setEditF(x => ({ ...x, billing_rate: e.target.value }))}
-                          placeholder="Optional"
-                          style={{ padding: '4px 8px', fontSize: 13, width: 100 }}
-                        />
-                      ) : (r.billing_rate ? `$${r.billing_rate}/hr` : '—')}
+                        <div style={{ display: 'flex', gap: 6 }}>
+                          <input value={editF.designation_code} maxLength={20}
+                            onChange={e => setE('designation_code', e.target.value)}
+                            placeholder="Code" style={{ ...cellInput, width: 70 }} />
+                          <input value={editF.designation_name} maxLength={100}
+                            onChange={e => setE('designation_name', e.target.value)}
+                            placeholder="Name" style={{ ...cellInput, minWidth: 140 }} />
+                        </div>
+                      ) : (designationLabel(r) || '—')}
+                    </td>
+                    <td>
+                      {editing ? (
+                        <ExperienceSelect value={editF.experience_level}
+                          onChange={v => setE('experience_level', v)} style={cellInput} />
+                      ) : (r.experience_level
+                        ? <span className="badge badge-gray">{r.experience_level}</span>
+                        : '—')}
                     </td>
                     <td>
                       {editing ? (
